@@ -319,11 +319,7 @@ $("projections").addEventListener("click", async () => {
     return;
   }
 
-  if (!pool.some(p => p.dkId)) {
-    status.textContent =
-      "Import a DraftKings salary CSV before loading projections.";
-    return;
-  }
+ 
 
   const season = $("season").value;
   const week = $("week").value;
