@@ -41,6 +41,18 @@ small,.muted{color:#aabbd0}
 <main>
 <section class="panel">
 <h2>Slate & Data</h2>
+
+<div class="controls" style="margin:15px 0">
+  <div>
+    <label for="csvFile">Import DraftKings Salaries</label>
+    <input type="file" id="csvFile" accept=".csv,text/csv">
+  </div>
+  <button id="importCSV">Load DraftKings Players</button>
+</div>
+<p id="csvStatus" class="muted">
+  Select a DraftKings NFL Classic salary CSV file.
+</p>
+ 
 <div class="controls">
 <div><label>Season</label><input id="season" type="number" value="2026" min="2020" max="2100"></div>
 <div><label>Week</label><input id="week" type="number" value="11" min="1" max="22"></div>
@@ -291,7 +303,120 @@ $("load").addEventListener("click",async()=>{
   $("status").textContent="API test failed: "+e.message;
  }
 });
-pool=makeDemo();
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+
+  text = text.replace(/^\uFEFF/, "");
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+
+    if (c === '"') {
+      if (quoted && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (c === "," && !quoted) {
+      row.push(field);
+      field = "";
+    } else if ((c === "\n" || c === "\r") && !quoted) {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      if (row.some(x => x.trim())) rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += c;
+    }
+  }
+
+  if (quoted) throw Error("CSV has an unclosed quote.");
+  row.push(field);
+  if (row.some(x => x.trim())) rows.push(row);
+
+  return rows;
+}
+
+$("importCSV").addEventListener("click", async () => {
+  const file = $("csvFile").files[0];
+
+  if (!file) {
+    $("csvStatus").textContent = "Please select a CSV file.";
+    return;
+  }
+
+  try {
+    const rows = parseCSV(await file.text());
+    if (rows.length < 2) throw Error("CSV contains no players.");
+
+    const headers = rows.shift().map(x => x.trim().toLowerCase());
+    const col = (...names) => names
+      .map(n => headers.indexOf(n.toLowerCase()))
+      .find(i => i >= 0);
+
+    const nameCol = col("Name", "Player Name");
+    const posCol = col("Position", "Roster Position");
+    const salaryCol = col("Salary");
+    const teamCol = col("TeamAbbrev", "Team", "Team Abbrev");
+    const idCol = col("ID", "Player ID");
+    const avgCol = col("AvgPointsPerGame", "Avg Points Per Game");
+
+    if ([nameCol, posCol, salaryCol].some(x => x === undefined)) {
+      throw Error("Missing Name, Position, or Salary column.");
+    }
+
+    const imported = rows.map((r, i) => {
+      const pos = (r[posCol] || "").trim().toUpperCase();
+      const salary = Number((r[salaryCol] || "").replace(/[$,]/g, ""));
+      const avg = avgCol === undefined ? 0 : Number(r[avgCol]);
+
+      return {
+        id: i + 1,
+        dkId: idCol === undefined ? "" : r[idCol],
+        name: (r[nameCol] || "").trim(),
+        pos: pos === "D" || pos === "DEF" ? "DST" : pos,
+        team: teamCol === undefined ? "" : (r[teamCol] || "").trim(),
+        salary,
+        proj: Number.isFinite(avg) ? avg : 0,
+        locked: false,
+        excluded: false
+      };
+    }).filter(p =>
+      p.name &&
+      ["QB", "RB", "WR", "TE", "DST"].includes(p.pos) &&
+      Number.isFinite(p.salary) &&
+      p.salary > 0
+    );
+
+    if (!imported.length) throw Error("No valid NFL players found.");
+
+    const positions = new Set(imported.map(p => p.pos));
+    if (["QB", "RB", "WR", "TE", "DST"].some(p => !positions.has(p))) {
+      throw Error("CSV is missing required NFL Classic positions.");
+    }
+
+    pool = imported;
+    lineups = [];
+    $("generated").textContent = "0";
+    $("results").textContent = "Players imported. Generate lineups.";
+    $("count").textContent = pool.length;
+
+    $("csvStatus").textContent =
+      `Imported ${pool.length} DraftKings players from ${file.name}.`;
+
+    $("status").textContent =
+      "DraftKings CSV loaded. Average points are not future projections.";
+
+    render();
+  } catch (err) {
+    $("csvStatus").textContent = "Import failed: " + err.message;
+  }
+});
+ pool=makeDemo();
 render();
 </script>
 </body>
