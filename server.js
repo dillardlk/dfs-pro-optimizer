@@ -61,6 +61,58 @@ app.get("/api/slates/:season/:week", async (req, res) => {
   }
 });
 
+app.get("/api/projections/:season/:week", async (req, res) => {
+  if (!API_KEY) {
+    return res.status(503).json({
+      error: "SportsDataIO API key not configured"
+    });
+  }
+
+  const { season, week } = req.params;
+
+  if (!/^\d{4}$/.test(season) ||
+      !/^\d{1,2}$/.test(week) ||
+      Number(week) < 1 ||
+      Number(week) > 22) {
+    return res.status(400).json({
+      error: "Invalid season or week"
+    });
+  }
+
+  try {
+    const url =
+      "https://api.sportsdata.io/v3/nfl/projections/json/" +
+      `PlayerGameProjectionStatsByWeek/${season}/${week}`;
+
+    const response = await fetch(url, {
+      headers: {
+        "Ocp-Apim-Subscription-Key": API_KEY
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!response.ok) {
+      return res.status(502).json({
+        error: `SportsDataIO returned HTTP ${response.status}`
+      });
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+      return res.status(502).json({
+        error: "Unexpected projections response"
+      });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      error: "Unable to retrieve NFL projections"
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`DFS Pro Optimizer running on port ${PORT}`);
 });
