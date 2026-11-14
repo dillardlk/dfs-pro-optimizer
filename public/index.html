@@ -57,6 +57,9 @@ small,.muted{color:#aabbd0}
 <div><label>Season</label><input id="season" type="number" value="2026" min="2020" max="2100"></div>
 <div><label>Week</label><input id="week" type="number" value="11" min="1" max="22"></div>
 <button id="load">Test SportsDataIO Slates</button>
+  
+<button id="projections">Load SportsDataIO Projections</button>
+
 <button class="secondary" id="mock">Load Demo Players</button>
 </div>
 <p id="status" class="muted">Demo mode. Live salaries and projections are not yet connected.</p>
@@ -284,7 +287,122 @@ $("position").addEventListener("change",render);
 $("generate").addEventListener("click",generate);
 $("export").addEventListener("click",exportCSV);
 $("mock").addEventListener("click",()=>{
- pool=makeDemo();lineups=[];
+ 
+function normalizePlayerName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(jr|sr|ii|iii|iv)\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeTeam(team) {
+  const aliases = {
+    JAC: "JAX",
+    LA: "LAR",
+    STL: "LAR",
+    SD: "LAC",
+    OAK: "LV",
+    WAS: "WAS",
+    WSH: "WAS"
+  };
+  const code = String(team || "").toUpperCase().trim();
+  return aliases[code] || code;
+}
+
+$("projections").addEventListener("click", async () => {
+  const status = $("status");
+
+  if (!pool.length) {
+    status.textContent = "Import DraftKings players first.";
+    return;
+  }
+
+  if (!pool.some(p => p.dkId)) {
+    status.textContent =
+      "Import a DraftKings salary CSV before loading projections.";
+    return;
+  }
+
+  const season = $("season").value;
+  const week = $("week").value;
+
+  status.textContent = "Loading SportsDataIO projections...";
+
+  try {
+    const response = await fetch(
+      `/api/projections/${season}/${week}`
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw Error(data.error || "Projection request failed");
+    }
+
+    if (!Array.isArray(data) || !data.length) {
+      throw Error("No projections returned for this week.");
+    }
+
+    const projectionMap = new Map();
+
+    for (const player of data) {
+      if (!player.Name || !player.Team || !player.Position) {
+        continue;
+      }
+
+      const key = [
+        normalizePlayerName(player.Name),
+        normalizeTeam(player.Team),
+        player.Position.toUpperCase()
+      ].join("|");
+
+      const projectedPoints = Number(player.FantasyPointsDraftKings);
+
+      if (Number.isFinite(projectedPoints) &&
+          projectedPoints >= 0) {
+        projectionMap.set(key, projectedPoints);
+      }
+    }
+
+    let matched = 0;
+
+    for (const player of pool) {
+      const key = [
+        normalizePlayerName(player.name),
+        normalizeTeam(player.team),
+        player.pos
+      ].join("|");
+
+      if (projectionMap.has(key)) {
+        player.proj = projectionMap.get(key);
+        player.hasProjection = true;
+        matched++;
+      } else {
+        player.hasProjection = false;
+      }
+    }
+
+    lineups = [];
+    $("generated").textContent = "0";
+    $("results").textContent =
+      "Projections updated. Generate new lineups.";
+
+    render();
+
+    status.textContent =
+      `SportsDataIO: matched ${matched} of ${pool.length} players. ` +
+      `${pool.length - matched} players still use CSV averages. ` +
+      "Trial projections may be scrambled.";
+
+  } catch (error) {
+    status.textContent =
+      "Projection loading failed: " + error.message;
+  }
+});
+
+  pool=makeDemo();lineups=[];
  $("generated").textContent="0";
  $("results").textContent="Demo players loaded. Generate lineups.";
  $("status").textContent="Demo data active — fictional players and projections.";
