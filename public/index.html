@@ -1,0 +1,298 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DFS Pro Optimizer</title>
+<style>
+:root{font-family:Arial,sans-serif;color:#e9eef8;background:#101827}
+*{box-sizing:border-box}
+body{margin:0}
+header{background:#18263b;padding:20px;border-bottom:2px solid #287cf5}
+h1{margin:0;color:#65adff}
+main{max-width:1250px;margin:auto;padding:20px}
+.panel{background:#1c2a40;border-radius:12px;padding:18px;margin-bottom:18px}
+.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:block;font-size:13px;color:#b9c9dc;margin-bottom:5px}
+input,select,button{padding:10px;border-radius:6px;border:1px solid #506078}
+input,select{background:#111e30;color:white}
+button{background:#2479ef;color:white;cursor:pointer;font-weight:bold}
+button:hover{background:#4694ff}
+button.secondary{background:#394a63}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:9px;text-align:left;border-bottom:1px solid #39495e}
+th{color:#93bdf7}
+.tablewrap{overflow-x:auto}
+.stats{display:flex;flex-wrap:wrap;gap:15px}
+.stat{background:#111e30;padding:15px;border-radius:8px;flex:1;min-width:140px}
+.stat strong{display:block;font-size:23px;color:#65adff}
+small,.muted{color:#aabbd0}
+.error{color:#ff9898}
+.good{color:#79e3ae}
+.lineup{border:1px solid #3c536f;border-radius:9px;padding:14px;margin:12px 0}
+</style>
+</head>
+<body>
+<header>
+<h1>🏈 DFS PRO OPTIMIZER</h1>
+<small>DraftKings NFL Classic • Lineup Builder</small>
+</header>
+<main>
+<section class="panel">
+<h2>Slate & Data</h2>
+<div class="controls">
+<div><label>Season</label><input id="season" type="number" value="2026" min="2020" max="2100"></div>
+<div><label>Week</label><input id="week" type="number" value="11" min="1" max="22"></div>
+<button id="load">Test SportsDataIO Slates</button>
+<button class="secondary" id="mock">Load Demo Players</button>
+</div>
+<p id="status" class="muted">Demo mode. Live salaries and projections are not yet connected.</p>
+</section>
+
+<section class="panel">
+<div class="stats">
+<div class="stat"><small>Salary Cap</small><strong>$50,000</strong></div>
+<div class="stat"><small>Available Players</small><strong id="count">0</strong></div>
+<div class="stat"><small>Generated Lineups</small><strong id="generated">0</strong></div>
+</div>
+</section>
+
+<section class="panel">
+<h2>Optimizer Settings</h2>
+<div class="controls">
+<div><label>Number of lineups (1–150)</label><input id="num" type="number" value="10" min="1" max="150"></div>
+<div><label>Player Search</label><input id="search" placeholder="Search players or teams"></div>
+<div><label>Position</label>
+<select id="position">
+<option value="">All</option>
+<option>QB</option><option>RB</option><option>WR</option>
+<option>TE</option><option>DST</option>
+</select></div>
+<button id="generate">Generate Lineups</button>
+<button id="export" class="secondary">Export CSV</button>
+</div>
+<p class="muted">Lock or exclude players before generating. Demo results are for testing only.</p>
+</section>
+
+<section class="panel">
+<h2>Player Pool</h2>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Salary</th><th>Proj.</th><th>Lock</th><th>Exclude</th></tr></thead>
+<tbody id="players"></tbody>
+</table>
+</div>
+</section>
+
+<section class="panel">
+<h2>Generated Lineups</h2>
+<div id="results" class="muted">Generate lineups to see results.</div>
+</section>
+</main>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const slots=["QB","RB","RB","WR","WR","WR","TE","FLEX","DST"];
+let pool=[],lineups=[];
+const money=n=>"$"+n.toLocaleString("en-US");
+const safe=s=>String(s).replace(/[&<>"']/g,c=>({
+"&":"&amp;","<":"&lt;",">":"&gt;",
+'"':"&quot;","'":"&#39;"
+}[c]));
+
+function makeDemo(){
+ const teams=["ATL","BUF","CAR","CHI","DAL","DET","GB","KC","MIA","NYJ","PHI","SF"];
+ const counts={QB:3,RB:6,WR:9,TE:4,DST:1};
+ let id=0,players=[];
+ for(const team of teams){
+  for(const [pos,count] of Object.entries(counts)){
+   for(let i=1;i<=count;i++){
+    const salary=pos==="DST"?2500+Math.floor(Math.random()*1800/100)*100:
+      3000+Math.floor(Math.random()*55)*100;
+    const base={QB:13,RB:7,WR:6,TE:4,DST:5}[pos];
+    players.push({
+      id:++id,name:`${team} ${pos} ${i}`,pos,team,
+      salary,proj:+(base+salary/1100+Math.random()*7).toFixed(1),
+      locked:false,excluded:false
+    });
+   }
+  }
+ }
+ return players;
+}
+
+function render(){
+ const query=$("search").value.toLowerCase();
+ const pos=$("position").value;
+ const visible=pool.filter(p=>
+  (!pos||p.pos===pos)&&
+  (p.name.toLowerCase().includes(query)||p.team.toLowerCase().includes(query))
+ );
+ $("count").textContent=pool.length;
+ $("players").innerHTML=visible.map(p=>`
+ <tr>
+ <td>${safe(p.name)}</td><td>${p.pos}</td><td>${p.team}</td>
+ <td>${money(p.salary)}</td><td>${p.proj.toFixed(1)}</td>
+ <td><input type="checkbox" data-id="${p.id}" data-action="lock" ${p.locked?"checked":""}></td>
+ <td><input type="checkbox" data-id="${p.id}" data-action="exclude" ${p.excluded?"checked":""}></td>
+ </tr>`).join("");
+}
+
+function eligible(p,slot){
+ return slot==="FLEX"?["RB","WR","TE"].includes(p.pos):p.pos===slot;
+}
+function valid(lineup){
+ if(lineup.length!==9||new Set(lineup.map(p=>p.id)).size!==9)return false;
+ if(lineup.reduce((s,p)=>s+p.salary,0)>50000)return false;
+ if(new Set(lineup.map(p=>p.team)).size<2)return false;
+ const remaining=[...lineup];
+ for(const slot of slots.filter(s=>s!=="FLEX")){
+  const index=remaining.findIndex(p=>eligible(p,slot));
+  if(index<0)return false;
+  remaining.splice(index,1);
+ }
+ return remaining.length===1&&eligible(remaining[0],"FLEX");
+}
+
+function buildOne(){
+ const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj));
+ const locked=available.filter(p=>p.locked);
+ if(locked.length>9)return null;
+ let best=null,bestScore=-Infinity;
+ // Randomized construction heuristic; not a mathematical optimal solver.
+ for(let attempt=0;attempt<500;attempt++){
+  const chosen=[...locked],used=new Set(locked.map(p=>p.id));
+  let salary=chosen.reduce((s,p)=>s+p.salary,0);
+  const order=["QB","DST","TE","RB","RB","WR","WR","WR","FLEX"];
+  // Assign locked players to compatible slots with backtracking.
+  function assign(i,remaining){
+   if(i===remaining.length)return [];
+   const slot=remaining[i];
+   const options=chosen.filter(p=>!p._assigned&&eligible(p,slot));
+   for(const p of options){
+    p._assigned=true;
+    const rest=assign(i+1,remaining);
+    if(rest){p._assigned=false;return [p,...rest]}
+    p._assigned=false;
+   }
+   return null;
+  }
+  // Choose slots for locked players using a small exhaustive search.
+  function placeLocks(i,remaining){
+   if(i===locked.length)return remaining;
+   const p=locked[i];
+   for(let j=0;j<remaining.length;j++){
+    if(!eligible(p,remaining[j]))continue;
+    const next=[...remaining];next.splice(j,1);
+    const found=placeLocks(i+1,next);
+    if(found)return found;
+   }
+   return null;
+  }
+  const open=placeLocks(0,order);
+  if(!open)continue;
+  let failed=false;
+  for(const slot of open){
+   const remainingSlots=open.length-chosen.length+locked.length;
+   const candidates=available.filter(p=>
+     !used.has(p.id)&&eligible(p,slot)&&salary+p.salary<=50000
+   );
+   if(!candidates.length){failed=true;break}
+   candidates.sort((a,b)=>
+     (b.proj/b.salary+Math.random()*.0008)-
+     (a.proj/a.salary+Math.random()*.0008)
+   );
+   const pick=candidates[Math.floor(Math.random()*Math.min(9,candidates.length))];
+   chosen.push(pick);used.add(pick.id);salary+=pick.salary;
+  }
+  if(failed||!valid(chosen))continue;
+  const score=chosen.reduce((s,p)=>s+p.proj,0);
+  if(score>bestScore){best=[...chosen];bestScore=score}
+ }
+ return best;
+}
+
+function generate(){
+ const count=Number($("num").value);
+ if(!Number.isInteger(count)||count<1||count>150){
+  $("results").textContent="Choose between 1 and 150 lineups.";return;
+ }
+ if(!pool.length){$("results").textContent="Load demo players first.";return}
+ lineups=[];
+ const seen=new Set();
+ for(let i=0;i<count*15&&lineups.length<count;i++){
+  const lineup=buildOne();
+  if(!lineup)break;
+  const key=lineup.map(p=>p.id).sort((a,b)=>a-b).join("-");
+  if(seen.has(key))continue;
+  seen.add(key);lineups.push(lineup);
+ }
+ lineups.sort((a,b)=>
+  b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
+ );
+ $("generated").textContent=lineups.length;
+ $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
+  const salary=l.reduce((s,p)=>s+p.salary,0);
+  const points=l.reduce((s,p)=>s+p.proj,0);
+  return `<div class="lineup"><strong>Lineup ${i+1}</strong>
+  <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
+  <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
+ }).join(""):"No valid lineup found. Try removing locks or exclusions.";
+}
+
+function exportCSV(){
+ if(!lineups.length){alert("Generate lineups first.");return}
+ const rows=[["Lineup","Player","Position","Team","Salary","Projection"]];
+ lineups.forEach((l,i)=>l.forEach(p=>rows.push([
+ i+1,p.name,p.pos,p.team,p.salary,p.proj
+ ])));
+ const csv=rows.map(row=>row.map(v=>
+ '"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+ const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+ const a=document.createElement("a");
+ a.href=url;a.download="dfs-pro-lineups.csv";a.click();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+$("players").addEventListener("change",e=>{
+ const input=e.target;
+ const p=pool.find(x=>x.id===Number(input.dataset.id));
+ if(!p)return;
+ if(input.dataset.action==="lock"){
+  p.locked=input.checked;if(p.locked)p.excluded=false;
+ }else{
+  p.excluded=input.checked;if(p.excluded)p.locked=false;
+ }
+ render();
+});
+$("search").addEventListener("input",render);
+$("position").addEventListener("change",render);
+$("generate").addEventListener("click",generate);
+$("export").addEventListener("click",exportCSV);
+$("mock").addEventListener("click",()=>{
+ pool=makeDemo();lineups=[];
+ $("generated").textContent="0";
+ $("results").textContent="Demo players loaded. Generate lineups.";
+ $("status").textContent="Demo data active — fictional players and projections.";
+ render();
+});
+$("load").addEventListener("click",async()=>{
+ const season=$("season").value,week=$("week").value;
+ $("status").textContent="Contacting SportsDataIO backend...";
+ try{
+  const response=await fetch(`/api/slates/${season}/${week}`);
+  const data=await response.json();
+  if(!response.ok)throw Error(data.error||"API request failed");
+  $("status").textContent=
+   `SportsDataIO returned ${Array.isArray(data)?data.length:"a"} slate record(s). Player mapping is the next integration step.`;
+ }catch(e){
+  $("status").textContent="API test failed: "+e.message;
+ }
+});
+pool=makeDemo();
+render();
+</script>
+</body>
+</html>
