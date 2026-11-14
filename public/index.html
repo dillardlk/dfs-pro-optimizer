@@ -287,6 +287,10 @@ $("position").addEventListener("change",render);
 $("generate").addEventListener("click",generate);
 $("export").addEventListener("click",exportCSV);
 $("mock").addEventListener("click",()=>{
+  pool = makeDemo();
+  lineups = [];
+  render();
+});
  
 function normalizePlayerName(name) {
   return String(name || "")
@@ -398,12 +402,7 @@ $("projections").addEventListener("click", async () => {
   }
 });
 
-  pool=makeDemo();lineups=[];
- $("generated").textContent="0";
- $("results").textContent="Demo players loaded. Generate lineups.";
- $("status").textContent="Demo data active — fictional players and projections.";
- render();
-});
+ 
 $("load").addEventListener("click",async()=>{
  const season=$("season").value,week=$("week").value;
  $("status").textContent="Contacting SportsDataIO backend...";
