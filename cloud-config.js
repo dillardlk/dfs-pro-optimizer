@@ -1,9 +1,10 @@
 'use strict';
 // Only publish a Supabase browser key. Reject secret/service-role keys even
 // if the deployment accidentally puts one in the public-key variable.
-module.exports=function publicCloudConfig(env=process.env){
- const url=env.SUPABASE_URL;
- const key=env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_ANON_KEY;
+module.exports=function publicCloudConfig(env=process.env,browserConfig={}){
+ const hasEnvironmentConfig=Boolean(env.SUPABASE_URL||env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_ANON_KEY);
+ const url=hasEnvironmentConfig?env.SUPABASE_URL:browserConfig.url;
+ const key=hasEnvironmentConfig?(env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_ANON_KEY):browserConfig.publishableKey;
  if(!url||!key)return {enabled:false};
  try{
   const parsed=new URL(url);

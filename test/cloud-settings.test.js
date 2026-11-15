@@ -79,3 +79,16 @@ test('vendored browser SDK provides the expected client entry point without a CD
  vm.runInContext(fs.readFileSync('public/vendor/supabase-2.119.0.js','utf8'),context);
  assert.equal(vm.runInContext('typeof supabase.createClient',context),'function');
 });
+test('deployment uses only the validated public project fallback and fails closed on bad environment overrides',()=>{
+ const browser={url:config.SUPABASE_URL,publishableKey:config.SUPABASE_PUBLISHABLE_KEY};
+ assert.equal(publicCloudConfig({},browser).enabled,true);
+ assert.equal(publicCloudConfig({...config,SUPABASE_URL:'https://override.supabase.co'},browser).url,'https://override.supabase.co');
+ assert.deepEqual(publicCloudConfig({SUPABASE_URL:'https://override.supabase.co'},browser),{enabled:false});
+ assert.deepEqual(publicCloudConfig({...config,SUPABASE_PUBLISHABLE_KEY:'sb_secret_wrong'},browser),{enabled:false});
+});
+test('the committed browser configuration contains only a publishable Supabase key',()=>{
+ const actual=require('../public/account-config.json');
+ assert.deepEqual(Object.keys(actual).sort(),['publishableKey','url']);
+ assert.match(actual.publishableKey,/^sb_publishable_[A-Za-z0-9_-]+$/);
+ assert.equal(publicCloudConfig({},actual).enabled,true);
+});
