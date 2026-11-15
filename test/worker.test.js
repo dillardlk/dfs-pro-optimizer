@@ -30,3 +30,17 @@ test('background worker returns original player IDs that map to valid exportable
  const invalid=await request(w,{pool:p,count:151});
  assert.match(invalid.error,/1 and 150/);
 });
+test('worker enforces exposure, stacking and player differences together',async t=>{
+ const w=worker();t.after(()=>w.terminate());
+ const p=[];
+ for(const team of ['KC','DEN','BUF','NYJ'])for(const pos of ['QB','RB','RB','RB','WR','WR','WR','WR','TE','TE','DST']){
+  const id=p.length+1;
+  p.push({id,dkId:String(400000+id),name:`${team} ${id}`,team,pos,game:['KC','DEN'].includes(team)?'KC|DEN':'BUF|NYJ',salary:5000,proj:10+id/10,source:'dk',startsAt:Date.UTC(2099,0,1)});
+ }
+ const settings={minUnique:2,globalMaxExposure:75,stackCount:1,bringBack:true,avoidOpposingDST:true};
+ const result=await request(w,{pool:p,count:4,...settings});
+ assert.equal(result.error,undefined);assert.equal(result.lineups.length,4);
+ const mapped=result.lineups.map(l=>l.map(id=>p.find(p=>p.id===id)));
+ assert.deepEqual(Classic.validatePortfolio(mapped,p,settings),[]);
+ assert.equal(Classic.exportCSV(mapped,p,settings).split('\r\n').length,5);
+});

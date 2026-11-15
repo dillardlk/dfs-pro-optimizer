@@ -62,12 +62,12 @@ test('imports reject duplicate IDs, duplicate players, unsupported formats and m
 function browser(){
  const elements=new Map();
  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',addEventListener(event,fn){this[event]=fn}});return elements.get(id)};
- get("minUnique").value="1";
+ get("minUnique").value="1";get("globalMaxExposure").value="100";get("stackCount").value="0";
  const context=vm.createContext({Classic,document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
   terminate(){this.stopped=true}
-  postMessage({pool,count,minUnique}){queueMicrotask(()=>{
+  postMessage({pool,count,...settings}){queueMicrotask(()=>{
    if(this.stopped)return;
-   try{const r=Classic.generate(pool,count,{minUnique});this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
+   try{const r=Classic.generate(pool,count,settings);this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
    catch(error){this.onmessage({data:{error:error.message}})}
   })}
  }});
@@ -236,4 +236,88 @@ test('UI sends the diversity setting, labels changed players, and invalidates re
  b.get('minUnique').input();
  assert.equal(b.run('lineups.length'),0);
  assert.match(b.get('results').textContent,/Minimum player difference changed/);
+});
+test('global and per-player exposure limits use actual portfolio size and retain locks',()=>{
+ const p=diversePool();p[0].locked=true;p[1].maxExposure=0;p[2].maxExposure=30;p[3].minExposure=40;
+ const options={minUnique:2,globalMaxExposure:60};
+ const r=Classic.generate(p,10,options);
+ assert.equal(r.lineups.length,10);
+ assert.deepEqual(Classic.validatePortfolio(r.lineups,p,options),[]);
+ const used=p=>r.lineups.filter(l=>l.includes(p)).length;
+ assert.equal(used(p[0]),10);assert.equal(used(p[1]),0);assert.ok(used(p[2])<=3);assert.ok(used(p[3])>=4);
+ assertDifference(r.lineups,2);
+ assert.equal(Classic.exportCSV(r.lineups,p,options).split('\r\n').length,11);
+});
+test('incompatible exposure constraints explain locks, exclusions and integer rounding',()=>{
+ let p=diversePool();p[0].locked=true;p[0].maxExposure=50;
+ assert.throws(()=>Classic.generate(p,10),/minimum exposure.*exceeds maximum/i);
+ p=diversePool();p[0].minExposure=50;p[0].excluded=true;
+ assert.throws(()=>Classic.generate(p,10),/excluded player/);
+ p=diversePool();p[0].minExposure=30;p[0].maxExposure=30;
+ assert.throws(()=>Classic.generate(p,3),/cannot be met with 3 lineups/);
+ assert.throws(()=>Classic.generate(p,10,{globalMaxExposure:101}),/whole percentage/);
+ p[0].maxExposure=NaN;
+ assert.throws(()=>Classic.generate(p,10),/whole percentage/);
+});
+test('short portfolios never bypass exposure percentages',()=>{
+ const p=pool();
+ assert.throws(()=>Classic.generate(p,10,{globalMaxExposure:50}),/Could not build a set/);
+ const original=Classic.generate(p,1).lineups;
+ assert.match(Classic.validatePortfolio(original,p,{globalMaxExposure:50}).join(' '),/exposure/);
+ assert.throws(()=>Classic.exportCSV(original,p,{globalMaxExposure:50}),/exposure/);
+});
+function stackingPool(){
+ const p=diversePool(),teams=['KC','DEN','BUF','NYJ'];
+ p.forEach((p,i)=>{p.team=teams[(Math.floor(i/9)+i)%4];p.game=['KC','DEN'].includes(p.team)?'KC|DEN|2099':'BUF|NYJ|2099'});
+ p[8].team='DEN';p[8].game='KC|DEN|2099';
+ return p;
+}
+test('QB double stacks, opposing bring-backs and DST avoidance work with diversity and exposure',()=>{
+ const p=stackingPool(),options={minUnique:2,globalMaxExposure:80,stackCount:2,bringBack:true,avoidOpposingDST:true};
+ const r=Classic.generate(p,5,options);
+ assert.equal(r.lineups.length,5);
+ assert.deepEqual(Classic.validatePortfolio(r.lineups,p,options),[]);
+ for(const l of r.lineups){
+  const qb=l.find(p=>p.pos==='QB');
+  assert.ok(l.filter(p=>['WR','TE'].includes(p.pos)&&p.team===qb.team&&p.game===qb.game).length>=2);
+  assert.ok(l.some(p=>['RB','WR','TE'].includes(p.pos)&&p.team!==qb.team&&p.game===qb.game));
+  assert.ok(!l.some(p=>p.pos==='DST'&&p.team!==qb.team&&p.game===qb.game));
+ }
+});
+test('invalid stacks and opposing locked DST produce actionable errors and fail export',()=>{
+ const p=stackingPool(),qb=p.find(p=>p.pos==='QB');qb.locked=true;
+ const dst=p.find(p=>p.pos==='DST'&&p.game===qb.game&&p.team!==qb.team);dst.locked=true;
+ assert.throws(()=>Classic.generate(p,1,{avoidOpposingDST:true}),/Locked players cannot satisfy/);
+ const wrong=Classic.generate(p,1).lineups;
+ assert.throws(()=>Classic.exportCSV(wrong,p,{avoidOpposingDST:true}),/opposing DST/);
+ assert.throws(()=>Classic.generate(p,1,{stackCount:3}),/QB stack must/);
+});
+test('exposure controls update and clear player overrides, show usage and invalidate stale results',async()=>{
+ const b=browser();b.context.fixture=diversePool();b.get('num').value='10';b.get('globalMaxExposure').value='60';
+ await b.run('pool=fixture;generate()');assert.equal(b.run('lineups.length'),10);
+ assert.match(b.get('players').innerHTML,/% \(/);
+ b.get('players').change({target:{dataset:{id:'1',action:'maxExposure'},value:'30'}});
+ assert.equal(b.run('pool[0].maxExposure'),30);assert.equal(b.run('lineups.length'),0);
+ b.get('players').change({target:{dataset:{id:'1',action:'maxExposure'},value:''}});
+ assert.equal(b.run('pool[0].maxExposure'),undefined);
+ b.get('stackCount').value='1';b.get('stackCount').change();
+ assert.match(b.get('results').textContent,/Exposure or stacking settings changed/);
+});
+test('individual maximum overrides the default and 100% minimum forces a player without changing locks',()=>{
+ const p=diversePool();p[0].minExposure=100;p[0].maxExposure=100;
+ const options={globalMaxExposure:60,minUnique:2};
+ const r=Classic.generate(p,5,options);
+ assert.equal(r.lineups.length,5);
+ assert.ok(r.lineups.every(l=>l.includes(p[0])));
+ assert.equal(p[0].locked,false);
+ assert.deepEqual(Classic.validatePortfolio(r.lineups,p,options),[]);
+ p[1].minExposure=60;p[1].maxExposure=40;
+ assert.throws(()=>Classic.generate(p,5,options),/exceeds maximum/);
+});
+test('stack rules reject same-team players from the wrong game and non-WR/TE teammates',()=>{
+ const p=pool(),l=Classic.generate(p,1).lineups[0],qb=l.find(p=>p.pos==='QB');
+ for(const p of l)if(['WR','TE'].includes(p.pos)){p.team=qb.team;p.game='different game'}
+ assert.match(Classic.validatePortfolio([l],p,{stackCount:1}).join(' '),/WR\/TE teammate/);
+ for(const p of l){p.game=qb.game;if(['RB','WR','TE'].includes(p.pos))p.team=qb.team}
+ assert.match(Classic.validatePortfolio([l],p,{bringBack:true}).join(' '),/bring-back/);
 });
