@@ -62,11 +62,12 @@ test('imports reject duplicate IDs, duplicate players, unsupported formats and m
 function browser(){
  const elements=new Map();
  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',addEventListener(event,fn){this[event]=fn}});return elements.get(id)};
+ get("minUnique").value="1";
  const context=vm.createContext({Classic,document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
   terminate(){this.stopped=true}
-  postMessage({pool,count}){queueMicrotask(()=>{
+  postMessage({pool,count,minUnique}){queueMicrotask(()=>{
    if(this.stopped)return;
-   try{const r=Classic.generate(pool,count);this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
+   try{const r=Classic.generate(pool,count,{minUnique});this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
    catch(error){this.onmessage({data:{error:error.message}})}
   })}
  }});
@@ -197,4 +198,42 @@ test('all nine locked players and a low-scoring required second game remain feas
  const r=Classic.generate(varied,1);
  assert.equal(r.lineups.length,1);
  assert.ok(r.lineups[0].some(p=>p.game==='two'));
+});
+function diversePool(){
+ const base=pool();
+ return [0,1,2].flatMap(copy=>base.map((p,i)=>({...p,id:p.id+copy*100,dkId:String(300000+copy*100+i),name:`Choice ${copy} ${i}`,proj:10+copy+i*.17})));
+}
+function assertDifference(lineups,minimum){
+ for(let i=0;i<lineups.length;i++){
+  const ids=new Set(lineups[i].map(p=>p.dkId));
+  for(let j=0;j<i;j++)assert.ok(9-lineups[j].filter(p=>ids.has(p.dkId)).length>=minimum);
+ }
+}
+test('diverse portfolios enforce player differences against every previous lineup, regardless of slot',()=>{
+ const p=diversePool();p[0].locked=true;p[1].excluded=true;
+ const r=Classic.generate(p,10,{minUnique:3});
+ assert.equal(r.lineups.length,10);
+ assertDifference(r.lineups,3);
+ r.lineups.forEach(l=>{assert.deepEqual(Classic.validate(l,p),[]);assert.ok(l.includes(p[0]));assert.ok(!l.includes(p[1]))});
+ const exported=Classic.exportCSV(r.lineups,p).split('\r\n');
+ assert.equal(exported.length,11);
+ assert.equal(new Set(exported.slice(1).map(row=>row.split(',').sort().join(','))).size,10);
+});
+test('diversity limits return fewer lineups without duplicates, and incompatible locks give guidance',()=>{
+ const p=pool();const r=Classic.generate(p,10,{minUnique:3});
+ assert.equal(r.lineups.length,1);
+ p.slice(0,7).forEach(p=>p.locked=true);
+ assert.throws(()=>Classic.generate(p,10,{minUnique:3}),/Reduce locks or the minimum difference/);
+ assert.throws(()=>Classic.generate(p,10,{minUnique:0}),/between 1 and 9/);
+ assert.throws(()=>Classic.generate(p,10,{minUnique:2.5}),/between 1 and 9/);
+});
+test('UI sends the diversity setting, labels changed players, and invalidates results when it changes',async()=>{
+ const b=browser();b.context.fixture=diversePool();b.get('num').value='10';b.get('minUnique').value='3';
+ await b.run('pool=fixture;generate()');
+ const lineups=b.run('lineups');assert.equal(lineups.length,10);assertDifference(lineups,3);
+ assert.match(b.get('results').innerHTML,/players different from Lineup 1/);
+ assert.match(b.get('status').textContent,/at least 3 different players between every pair/);
+ b.get('minUnique').input();
+ assert.equal(b.run('lineups.length'),0);
+ assert.match(b.get('results').textContent,/Minimum player difference changed/);
 });

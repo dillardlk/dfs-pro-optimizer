@@ -99,7 +99,7 @@ function orderForPool(pool){
 // Bounded beam search. Relaxed suffix scores rank partial lineups while
 // preserving enough salary to finish; duplicate choices in the relaxation
 // make it optimistic. Final results always pass the full Classic validator.
-function generate(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8)}={}){
+function search(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8),minUnique=1,avoid=[]}={}){
  if(!Number.isInteger(count)||count<1||count>150)throw Error('Choose between 1 and 150 lineups.');
  if(!Number.isInteger(beamWidth)||beamWidth<1||beamWidth>5000)throw Error('Invalid search width.');
  const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
@@ -151,8 +151,12 @@ function generate(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8)}={}
   suffix[depth]=values;
  }
  if(suffix[0][budget]===-Infinity)throw Error('No lineup fits the $50,000 salary cap with these selections.');
+ const priorSets=avoid.map(l=>new Set(l.map(identity)));
+ const maxShared=9-minUnique;
+ const baseOverlaps=priorSets.map(set=>locked.filter(p=>set.has(identity(p))).length);
+ if(baseOverlaps.some(n=>n>maxShared))return {lineups:[],examined:0,limited:false};
  const baseScore=locked.reduce((s,p)=>s+p.proj,0);
- let beam=[{players:locked.slice(),used:new Set(locked.map(identity)),salary:lockedSalary,score:baseScore,bound:baseScore+suffix[0][budget],last:-1}];
+ let beam=[{players:locked.slice(),used:new Set(locked.map(identity)),salary:lockedSalary,score:baseScore,bound:baseScore+suffix[0][budget],last:-1,overlaps:baseOverlaps}];
  let examined=0,pruned=false;
  // A min-heap keeps only the strongest partial lineups without sorting
  // every candidate expansion. Tie-breaking is stable and deterministic.
@@ -189,13 +193,15 @@ function generate(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8)}={}
     if(future===-Infinity)continue;
     const score=state.score+p.proj,bound=score+future;
     if(heap.length>=beamWidth&&!better({bound,score,salary},heap[0])){pruned=true;continue}
+    const overlaps=priorSets.map((set,i)=>state.overlaps[i]+Number(set.has(id)));
+    if(overlaps.some(n=>n>maxShared))continue;
     const players=[...state.players,p];
     const groups=new Set(players.map(group));
     if(groups.size<2&&!candidates.slice(depth+1).some(list=>list.some(next=>!state.used.has(identity(next))&&identity(next)!==id&&group(next)!==group(p))))continue;
     const fingerprint=key(players);if(seen.has(fingerprint))continue;
     seen.add(fingerprint);
     if(depth===open.length-1&&validate(players,pool,{now}).length)continue;
-    retain({players,used:new Set([...state.used,id]),salary,score,bound,last:index});
+    retain({players,used:new Set([...state.used,id]),salary,score,bound,last:index,overlaps});
    }
   }
   beam=heap;
@@ -204,6 +210,36 @@ function generate(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8)}={}
  const lineups=beam.filter(s=>s.players.length===9&&!validate(s.players,pool,{now}).length)
   .sort((a,b)=>b.score-a.score||a.salary-b.salary).slice(0,count).map(s=>order(s.players));
  return {lineups,examined,limited:pruned};
+}
+
+// Select a portfolio, then repeat the bounded search with overlap constraints
+// against every accepted lineup. This finds alternatives beyond near-identical
+// variations among the highest raw scores. Locks always remain in every lineup.
+function generate(pool,count,options={}){
+ const minUnique=options.minUnique??1;
+ if(!Number.isInteger(count)||count<1||count>150)throw Error('Choose between 1 and 150 lineups.');
+ if(!Number.isInteger(minUnique)||minUnique<1||minUnique>9)throw Error('Minimum different players must be between 1 and 9.');
+ if(minUnique===1)return search(pool,count,options);
+ if(count>1&&pool.filter(p=>p.locked).length>9-minUnique)throw Error(`Too many locked players for ${minUnique} different players per lineup. Reduce locks or the minimum difference.`);
+ const lineups=[];
+ let examined=0,limited=false,rounds=0;
+ const deadline=Date.now()+15000;
+ while(lineups.length<count&&rounds<30&&Date.now()<deadline){
+  const result=search(pool,Math.max(1,count-lineups.length),{...options,minUnique,avoid:lineups});
+  examined+=result.examined;limited=limited||result.limited;rounds++;
+  let added=0;
+  for(const lineup of result.lineups){
+   const ids=new Set(lineup.map(identity));
+   if(lineups.every(previous=>previous.filter(p=>ids.has(identity(p))).length<=9-minUnique)){
+    lineups.push(lineup);added++;
+    if(lineups.length===count)break;
+   }
+  }
+  if(!added)break;
+ }
+ if(rounds===30||Date.now()>=deadline)limited=true;
+ lineups.sort((a,b)=>b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0));
+ return {lineups,examined,limited};
 }
 
 const api={slots,eligible,key,order,validate,exportCSV,importRows,generate};

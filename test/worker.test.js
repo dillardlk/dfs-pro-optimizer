@@ -25,6 +25,8 @@ test('background worker returns original player IDs that map to valid exportable
  const mapped=result.lineups.map(l=>l.map(id=>p.find(p=>p.id===id)));
  assert.deepEqual(Classic.validate(mapped[0],p),[]);
  assert.equal(Classic.exportCSV(mapped,p).split('\r\n').length,2);
+ const badDifference=await request(w,{pool:p,count:10,minUnique:10});
+ assert.match(badDifference.error,/Minimum different players/);
  const invalid=await request(w,{pool:p,count:151});
  assert.match(invalid.error,/1 and 150/);
 });

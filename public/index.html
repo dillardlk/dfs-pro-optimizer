@@ -77,6 +77,7 @@ small,.muted{color:#aabbd0}
 <h2>Optimizer Settings</h2>
 <div class="controls">
 <div><label>Number of lineups (1–150)</label><input id="num" type="number" value="10" min="1" max="150"></div>
+<div><label for="minUnique">Minimum different players</label><input id="minUnique" type="number" value="3" min="1" max="9"></div>
 <div><label>Player Search</label><input id="search" placeholder="Search players or teams"></div>
 <div><label>Position</label>
 <select id="position">
@@ -87,7 +88,7 @@ small,.muted{color:#aabbd0}
 <button id="generate">Generate Lineups</button>
 <button id="export" class="secondary">Export CSV</button>
 </div>
-<p class="muted">Lock or exclude players before generating. Demo results are for testing only and cannot be exported. Imported salaries define the active slate; use the matching contest file. Reimport if DraftKings changes eligibility.</p>
+<p class="muted">Each pair of lineups must differ by at least the selected number of players, regardless of roster slot. Start with 3 for more variety. More variety can reduce projected points or the number of lineups found. Locked players stay in every lineup. Lock or exclude players before generating. Demo results are for testing only and cannot be exported. Imported salaries define the active slate; use the matching contest file. Reimport if DraftKings changes eligibility.</p>
 </section>
 
 <section class="panel">
@@ -169,6 +170,7 @@ function resetLineups(message="Player selections changed. Generate new lineups."
 
 async function generate(){
  const count=Number($("num").value);
+ const minUnique=Number($("minUnique").value);
  if(!Number.isInteger(count)||count<1||count>150){
   $("results").textContent="Choose between 1 and 150 lineups.";return;
  }
@@ -182,7 +184,7 @@ async function generate(){
    generationWorker=new Worker("/optimizer-worker.js");
    generationWorker.onmessage=({data})=>data.error?reject(Error(data.error)):resolve(data);
    generationWorker.onerror=()=>reject(Error("Unable to run the lineup generator. Refresh the page and try again."));
-   generationWorker.postMessage({pool,count});
+   generationWorker.postMessage({pool,count,minUnique});
   });
   if(version!==generationVersion||!result)return;
   const byId=new Map(pool.map(p=>[p.id,p]));
@@ -192,17 +194,24 @@ async function generate(){
    const errors=Classic.validate(lineup,pool);
    if(errors.length)throw Error(`Lineup ${i+1}: ${errors.join(" ")}`);
   }
+  for(let i=0;i<lineups.length;i++){
+   const ids=new Set(lineups[i].map(p=>p.id));
+   for(let j=0;j<i;j++)if(lineups[j].filter(p=>ids.has(p.id)).length>9-minUnique)throw Error("Lineups did not meet the minimum player difference. Generate again.");
+  }
   if(new Set(lineups.map(Classic.key)).size!==lineups.length)throw Error("The search returned a duplicate lineup. Generate again.");
   lineups.sort((a,b)=>
    b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
   );
   $("generated").textContent=lineups.length;
-  $("status").textContent=`Generated ${lineups.length} of ${count} requested unique lineups. `+
+  $("status").textContent=`Generated ${lineups.length} of ${count} requested lineups, with at least ${minUnique} different players between every pair. `+
+    (lineups.length<count?"Locks, exclusions, diversity constraints or search limits prevented a full set. ":"")+
     (result.limited?"Search limit applied; results are not guaranteed optimal.":"Search completed.");
   $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
    const salary=l.reduce((s,p)=>s+p.salary,0);
    const points=l.reduce((s,p)=>s+p.proj,0);
-   return `<div class="lineup"><strong>Lineup ${i+1}</strong>
+   const firstIds=new Set(lineups[0].map(p=>p.id));
+   const different=9-l.filter(p=>firstIds.has(p.id)).length;
+   return `<div class="lineup"><strong>Lineup ${i+1}</strong>${i?` <small>${different} players different from Lineup 1</small>`:""}
    <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
    <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
   }).join(""):"No valid lineup found. Check locks, exclusions, positional availability, the $50,000 cap, and the two-game minimum. The bounded search may miss feasible lineups.";
@@ -240,6 +249,7 @@ $("players").addEventListener("change",e=>{
  resetLineups();
  render();
 });
+$("minUnique").addEventListener("input",()=>resetLineups("Minimum player difference changed. Generate new lineups."));
 $("search").addEventListener("input",render);
 $("position").addEventListener("change",render);
 $("generate").addEventListener("click",generate);
