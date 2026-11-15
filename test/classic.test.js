@@ -114,3 +114,21 @@ test('actual import handler preserves DK IDs and projections handler updates the
  await b.get('projections').click();
  assert.match(b.get('status').textContent,/Projection loading failed/);
 });
+test('optional injury statuses exclude unavailable players by default but retain questionable players',()=>{
+ const r=rows();r[0].push('Status');
+ r.slice(1).forEach((row,i)=>row.push(['OUT','IR','Q','PUP','NFI','SUSP','SUSPENDED','',''][i]));
+ const p=Classic.importRows(r);
+ assert.deepEqual(p.map(x=>x.excluded),[true,true,false,true,true,true,true,false,false]);
+ assert.equal(p[2].status,'Q');
+ assert.equal(p[0].dkId,'100000');
+ assert.equal(pool().some(p=>p.excluded),false);
+});
+test('CSV injury status is visible in the player table and excluded players are not generated',()=>{
+ const b=browser();const r=rows();r[0].push('Status');r[1].push('OUT');
+ b.context.fixture=Classic.importRows(r);
+ b.run('pool=fixture;render()');
+ assert.match(b.get('players').innerHTML,/>OUT<\/small>/);
+ b.get('num').value='1';b.run('generate()');
+ assert.equal(b.run('lineups.length'),0);
+ assert.match(b.get('results').textContent,/Not enough eligible QB/);
+});

@@ -149,7 +149,7 @@ function render(){
  $("count").textContent=pool.length;
  $("players").innerHTML=visible.map(p=>`
  <tr>
- <td>${safe(p.name)}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td>
+ <td>${safe(p.name)}${p.status?` <small class="${p.excluded?"error":"muted"}">${safe(p.status)}</small>`:""}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td>
  <td>${money(p.salary)}</td><td>${p.proj.toFixed(1)}</td>
  <td><input type="checkbox" data-id="${p.id}" data-action="lock" ${p.locked?"checked":""}></td>
  <td><input type="checkbox" data-id="${p.id}" data-action="exclude" ${p.excluded?"checked":""}></td>
@@ -471,7 +471,8 @@ $("importCSV").addEventListener("click", async () => {
     $("count").textContent = pool.length;
 
     $("csvStatus").textContent =
-      `Imported ${pool.length} DraftKings players from ${file.name}.`;
+      `Imported ${pool.length} DraftKings players from ${file.name}. ` +
+      `${pool.filter(p=>p.excluded).length} players excluded by default based on supplied OUT/IR/PUP/NFI/suspension statuses. Review current news; you can change exclusions manually.`;
 
     $("status").textContent =
       "DraftKings CSV loaded. Average points are not future projections.";

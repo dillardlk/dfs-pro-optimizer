@@ -8,7 +8,7 @@ Install dependencies with `npm install`, then run `npm start` (default port 3000
 
 1. Download the DraftKings **NFL Classic** salaries CSV for the exact contest slate and import it. The standard Position, Name, ID, Roster Position, Salary, Game Info and TeamAbbrev columns are required. AvgPointsPerGame remains an optional fallback.
 2. Optionally load SportsDataIO projections for the matching season/week. This updates projections without adding players to the imported slate.
-3. Select locks/exclusions and generate up to 150 unique lineups.
+3. Review injury statuses when provided in the CSV: OUT, IR, PUP, NFI and suspended players are excluded by default; questionable players remain available. Exclusions can be manually overridden. Blank status does not guarantee a player is active; status reflects only the imported file. Select locks/exclusions and generate up to 150 unique lineups.
 4. Export the CSV and use DraftKings **Upload Lineups** for that same slate. This export creates lineups, rather than editing previously reserved entries.
 
 Exports contain one lineup per row with headers `QB,RB,RB,WR,WR,WR,TE,FLEX,DST` and the imported DraftKings player IDs. Demo lineups cannot be exported. Every lineup must have nine unique players, valid positions, a salary at or below $50,000, players from at least two games, all locked players, and no excluded players. Importing duplicate players, Showdown or SuperFlex salaries, invalid game information or incomplete Classic pools reports an error. Changing locks, exclusions, salaries or projections clears previously generated lineups.

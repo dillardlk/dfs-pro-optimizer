@@ -63,12 +63,14 @@ function importRows(rows){
  if(rows.length<2)throw Error('CSV contains no players.');
  const headers=rows[0].map(x=>x.trim().toLowerCase());
  const col=(...names)=>names.map(n=>headers.indexOf(n.toLowerCase())).find(i=>i>=0);
- const cols={name:col('Name','Player Name'),pos:col('Position'),salary:col('Salary'),team:col('TeamAbbrev','Team','Team Abbrev'),dkId:col('ID','Player ID'),game:col('Game Info'),roster:col('Roster Position'),avg:col('AvgPointsPerGame','Avg Points Per Game')};
+ const cols={name:col('Name','Player Name'),pos:col('Position'),salary:col('Salary'),team:col('TeamAbbrev','Team','Team Abbrev'),dkId:col('ID','Player ID'),game:col('Game Info'),roster:col('Roster Position'),avg:col('AvgPointsPerGame','Avg Points Per Game'),status:col('Status')};
  for(const field of ['name','pos','salary','team','dkId','game','roster'])if(cols[field]===undefined)throw Error(`Missing ${field} column. Import a DraftKings NFL Classic salaries CSV.`);
  const ids=new Set(),names=new Set();
  const players=rows.slice(1).map((row,i)=>{
   const get=k=>(row[cols[k]]||'').trim();
   const p={id:i+1,dkId:get('dkId'),name:get('name'),pos:get('pos').toUpperCase().replace(/^(D|DEF)$/,'DST'),team:get('team').toUpperCase(),salary:Number(get('salary').replace(/[$,]/g,'')),proj:Number(get('avg'))||0,source:'dk',locked:false,excluded:false};
+  p.status=get('status').toUpperCase();
+  p.excluded=['OUT','IR','PUP','NFI','SUSP','SUSPENDED'].includes(p.status);
   const game=get('game').toUpperCase().match(/^([A-Z]{2,3})@([A-Z]{2,3})\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{1,2}:\d{2}(?:AM|PM))\s+ET$/);
   const fail=message=>{throw Error(`Row ${i+2}: ${message}`)};
   if(!p.name||!/^\d+$/.test(p.dkId))fail('Missing name or invalid DraftKings player ID.');
