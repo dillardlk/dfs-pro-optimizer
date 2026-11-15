@@ -9,7 +9,15 @@
 :root{font-family:Arial,sans-serif;color:#e9eef8;background:#101827}
 *{box-sizing:border-box}
 body{margin:0}
-header{background:#18263b;padding:20px;border-bottom:2px solid #287cf5}
+header{background:#18263b;padding:20px;border-bottom:2px solid #287cf5;display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.account-menu{position:relative;margin-left:auto;flex-shrink:0}
+.account-menu summary{cursor:pointer;padding:10px 14px;border:1px solid #506078;border-radius:6px;background:#2479ef;font-weight:bold}
+.account-menu summary:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.account-popover{position:absolute;right:0;top:100%;margin-top:10px;padding:18px;width:380px;max-width:calc(100vw - 40px);background:#1c2a40;border:1px solid #506078;border-radius:12px;box-shadow:0 12px 30px #0008;z-index:10;max-height:70vh;overflow:auto}
+.account-popover .controls>div{width:100%}
+.account-popover input{width:100%;min-width:0}
+.account-popover h2{margin-top:0;font-size:18px}
+@media(max-width:600px){header{flex-wrap:wrap}header h1{font-size:24px}.account-menu{margin-left:auto}}
 h1{margin:0;color:#65adff}
 main{max-width:1250px;margin:auto;padding:20px}
 .panel{background:#1c2a40;border-radius:12px;padding:18px;margin-bottom:18px}
@@ -36,8 +44,24 @@ small,.muted{color:#aabbd0}
 </head>
 <body>
 <header>
-<h1>🏈 DFS PRO OPTIMIZER</h1>
-<small id="contestSubtitle">DraftKings NFL Classic • Lineup Builder</small>
+<div><h1>🏈 DFS PRO OPTIMIZER</h1>
+<small id="contestSubtitle">DraftKings NFL Classic • Lineup Builder</small></div>
+<details class="account-menu">
+<summary>Account / Sign In</summary>
+<div class="account-popover">
+<h2>Optimizer Account</h2>
+<div class="controls">
+<div><label for="accountEmail">Email</label><input id="accountEmail" type="email" autocomplete="username" inputmode="email"></div>
+<div><label for="accountPassword">Password</label><input id="accountPassword" type="password" autocomplete="current-password" minlength="8"></div>
+<button id="accountSignIn" disabled>Sign In</button>
+<button id="accountSignUp" class="secondary" disabled>Create Account</button>
+<button id="accountResetPassword" class="secondary" disabled>Forgot Password</button>
+<button id="accountUpdatePassword" class="secondary" hidden>Set New Password</button>
+<button id="accountSignOut" class="secondary" disabled>Sign Out</button>
+</div>
+<p id="accountStatus" class="muted" role="status" aria-live="polite">Checking private account storage…</p>
+</div>
+</details>
 </header>
 <main>
 <section class="panel">
@@ -120,16 +144,6 @@ small,.muted{color:#aabbd0}
 
 <section class="panel">
 <h2>Private Account Settings</h2>
-<div class="controls">
-<div><label for="accountEmail">Email</label><input id="accountEmail" type="email" autocomplete="username" inputmode="email"></div>
-<div><label for="accountPassword">Password</label><input id="accountPassword" type="password" autocomplete="current-password" minlength="8"></div>
-<button id="accountSignIn" disabled>Sign In</button>
-<button id="accountSignUp" class="secondary" disabled>Create Account</button>
-<button id="accountResetPassword" class="secondary" disabled>Forgot Password</button>
-<button id="accountUpdatePassword" class="secondary" hidden>Set New Password</button>
-<button id="accountSignOut" class="secondary" disabled>Sign Out</button>
-</div>
-<p id="accountStatus" class="muted" role="status" aria-live="polite">Checking private account storage…</p>
 <div class="controls" style="margin-bottom:12px">
 <div><label for="accountPresets">Your account presets</label><select id="accountPresets"><option value="">Sign in to load presets</option></select></div>
 <button id="accountSavePreset" disabled>Save to Account</button>
