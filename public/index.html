@@ -36,11 +36,18 @@ small,.muted{color:#aabbd0}
 <body>
 <header>
 <h1>🏈 DFS PRO OPTIMIZER</h1>
-<small>DraftKings NFL Classic • Lineup Builder</small>
+<small id="contestSubtitle">DraftKings NFL Classic • Lineup Builder</small>
 </header>
 <main>
 <section class="panel">
 <h2>Slate & Data</h2>
+<div class="controls">
+<div><label for="contestFormat">Contest format</label><select id="contestFormat"><option value="classic">NFL Classic</option><option value="showdown">NFL Showdown Captain Mode</option></select></div>
+<div><label for="slateType">Game slate</label><select id="slateType"><option value="main">Main</option><option value="early">Early (before 4 PM ET)</option><option value="late">Late (4 PM ET onward)</option><option value="custom">Other / custom DK slate</option><option value="single" disabled>Single game (Showdown)</option></select></div>
+<div><label for="providerSlate">Available SportsDataIO slates</label><select id="providerSlate"><option value="">Use imported CSV</option></select></div>
+</div>
+<p id="rosterHelp" class="muted">Classic: QB, 2 RB, 3 WR, TE, FLEX, DST. Use the official DK salary file for the exact slate.</p>
+<small>Each slate has its own DK IDs. Selecting Main, Early or Late does not convert one salary file into another slate. Import the matching contest file. Provider player IDs and salaries are cross-checked when supplied; metadata-only feeds rely on your official CSV.</small>
 
 <div class="controls" style="margin:15px 0">
   <div>
@@ -50,13 +57,13 @@ small,.muted{color:#aabbd0}
   <button id="importCSV">Load DraftKings Players</button>
 </div>
 <p id="csvStatus" class="muted">
-  Select a DraftKings NFL Classic salary CSV file.
+  Select the official DraftKings salary CSV for your chosen format and slate.
 </p>
  
 <div class="controls">
 <div><label>Season</label><input id="season" type="number" value="2026" min="2020" max="2100"></div>
 <div><label>Week</label><input id="week" type="number" value="11" min="1" max="22"></div>
-<button id="load">Test SportsDataIO Slates</button>
+<button id="load">Load Available Slates</button>
   
 <button id="projections">Load SportsDataIO Projections</button>
 
@@ -88,7 +95,7 @@ small,.muted{color:#aabbd0}
 <select id="position">
 <option value="">All</option>
 <option>QB</option><option>RB</option><option>WR</option>
-<option>TE</option><option>DST</option>
+<option>TE</option><option>K</option><option>DST</option>
 </select></div>
 <button id="generate">Generate Lineups</button>
 <button id="export" class="secondary">Export CSV</button>
@@ -152,11 +159,34 @@ small,.muted{color:#aabbd0}
 
 <script src="/classic.js"></script>
 <script src="/profiles.js"></script>
+<script src="/slates.js"></script>
 <script src="/cloud-profiles.js"></script>
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const slots=Classic.slots;
+function currentEngine(){return $("contestFormat").value==="showdown"?Classic.Showdown:Classic}
+let contestContext={contestFormat:"classic",slateType:"main"},slateCatalog=[],slateRequestId=0;
+function selectedProviderSlate(){return slateCatalog.find(s=>s.id===$("providerSlate").value)||null}
+function renderSlateChoices(){
+ const format=$("contestFormat").value,type=$("slateType").value;
+ const available=slateCatalog.filter(s=>s.format===format&&(type==="custom"||s.type===type));
+ $("providerSlate").innerHTML='<option value="">Use imported CSV</option>'+available.map(s=>`<option value="${safe(s.id)}">${safe(s.name)} · ${s.games} game(s) · ${safe(s.start.replace("T"," "))} ET</option>`).join("");
+ $("providerSlate").value="";
+}
+function setContestContext(format,type){
+ if(!["classic","showdown"].includes(format))throw Error("Unsupported contest format.");
+ type=format==="showdown"?"single":(type==="single"?"main":type);
+ const changed=contestContext.contestFormat!==format||contestContext.slateType!==type;
+ if(contestContext.contestFormat!==format&&["My NFL Classic","My NFL Showdown"].includes($("presetName").value))$("presetName").value=format==="showdown"?"My NFL Showdown":"My NFL Classic";
+ $("contestFormat").value=format;$("slateType").value=type;$("slateType").disabled=format==="showdown";
+ contestContext={contestFormat:format,slateType:type};
+ const engine=currentEngine();$("minUnique").max=engine.size;
+ if(Number($("minUnique").value)>engine.size)$("minUnique").value="2";
+ $("contestSubtitle").textContent=`DraftKings ${engine.label} • Lineup Builder`;
+ $("rosterHelp").textContent=format==="showdown"?"Showdown: 1 Captain + 5 FLEX; one game, both teams, $50,000 cap. CPT salary comes from the CSV; Captain points are 1.5×. Exposure and player differences count each person across both roles.":"Classic: QB, 2 RB, 3 WR, TE, FLEX, DST; at least two games and a $50,000 cap.";
+ if(changed){pendingPreset=null;pool=[];renderSlateChoices();$("csvStatus").textContent="Select the matching DraftKings salary CSV for this format and slate.";resetLineups("Contest or slate changed. Import its matching DraftKings salary CSV.")}
+}
+
 let pool=[],lineups=[];
 const money=n=>"$"+n.toLocaleString("en-US");
 const safe=s=>String(s).replace(/[&<>"']/g,c=>({
@@ -164,7 +194,17 @@ const safe=s=>String(s).replace(/[&<>"']/g,c=>({
 '"':"&quot;","'":"&#39;"
 }[c]));
 
+function makeShowdownDemo(){
+ const rows=[["Position","Name","ID","Roster Position","Salary","Game Info","TeamAbbrev","AvgPointsPerGame"]];
+ let id=0;
+ for(const team of ["ATL","BUF"])for(const [i,pos] of ["QB","QB","RB","RB","RB","WR","WR","WR","WR","TE","TE","K","DST"].entries()){
+  const salary=2500+Math.floor(Math.random()*65)*100;
+  for(const slot of ["CPT","FLEX"])rows.push([pos,`${team} Demo ${i}`,String(++id),slot,String(salary*(slot==="CPT"?1.5:1)),"ATL@BUF 12/31/2099 01:00PM ET",team,String(5+Math.random()*20)]);
+ }
+ return Classic.Showdown.importRows(rows).map(p=>({...p,source:"demo",dkId:undefined,projectionSource:"Demo"}));
+}
 function makeDemo(){
+ if($("contestFormat").value==="showdown")return makeShowdownDemo();
  const teams=["ATL","BUF","CAR","CHI","DAL","DET","GB","KC","MIA","NYJ","PHI","SF"];
  const counts={QB:3,RB:6,WR:9,TE:4,DST:1};
  let id=0,players=[];
@@ -187,32 +227,32 @@ function makeDemo(){
 }
 
 function render(){
- const usage=new Map();
- for(const l of lineups)for(const p of l)usage.set(p.id,(usage.get(p.id)||0)+1);
+ const engine=currentEngine(),usage=new Map();
+ for(const l of lineups)for(const p of l)usage.set(engine.identity(p),(usage.get(engine.identity(p))||0)+1);
  const query=$("search").value.toLowerCase();
  const pos=$("position").value;
  const visible=pool.filter(p=>
   (!pos||p.pos===pos)&&
   (p.name.toLowerCase().includes(query)||p.team.toLowerCase().includes(query))
  );
- $("count").textContent=pool.length;
+ $("count").textContent=new Set(pool.map(engine.identity)).size;
  $("players").innerHTML=visible.map(p=>`
  <tr>
- <td>${safe(p.name)}${p.status?` <small class="${p.excluded?"error":"muted"}">${safe(p.status)}</small>`:""}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td>
+ <td>${safe(p.name)}${p.status?` <small class="${p.excluded?"error":"muted"}">${safe(p.status)}</small>`:""}</td><td>${safe(p.rosterSlot?p.rosterSlot+" · "+p.pos:p.pos)}</td><td>${safe(p.team)}</td>
  <td>${money(p.salary)}</td><td>
- <input type="number" step="0.1" min="-1000" max="1000" style="width:90px" aria-label="Projection for ${safe(p.name)}" data-id="${p.id}" data-action="projection" value="${p.proj}">
+ <input type="number" step="0.1" min="${-1000*(p.projectionMultiplier||1)}" max="${1000*(p.projectionMultiplier||1)}" style="width:90px" aria-label="Projection for ${safe(p.name)}" data-id="${p.id}" data-action="projection" value="${p.proj}">
  <small>${p.projectionOverride!==undefined?"Manual":safe(p.projectionSource||"CSV average")}</small>
  ${p.projectionOverride!==undefined?`<button class="secondary" type="button" data-id="${p.id}" data-action="resetProjection">Reset</button>`:""}</td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Minimum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="minExposure" value="${p.minExposure??""}" placeholder="0"></td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Maximum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="maxExposure" value="${p.maxExposure??""}" placeholder="Default"></td>
- <td>${lineups.length?`${((usage.get(p.id)||0)/lineups.length*100).toFixed(1)}% (${usage.get(p.id)||0}/${lineups.length})`:"—"}</td>
+ <td>${lineups.length?`${((usage.get(engine.identity(p))||0)/lineups.length*100).toFixed(1)}% (${usage.get(engine.identity(p))||0}/${lineups.length})`:"—"}</td>
  <td><input type="checkbox" data-id="${p.id}" data-action="lock" ${p.locked?"checked":""}></td>
  <td><input type="checkbox" data-id="${p.id}" data-action="exclude" ${p.excluded?"checked":""}></td>
  </tr>`).join("");
 }
 
 function optimizerSettings(){
- return {minUnique:Number($("minUnique").value),globalMaxExposure:Number($("globalMaxExposure").value),stackCount:Number($("stackCount").value),bringBack:$("bringBack").checked,avoidOpposingDST:$("avoidOpposingDST").checked};
+ return {...contestContext,minUnique:Number($("minUnique").value),globalMaxExposure:Number($("globalMaxExposure").value),stackCount:Number($("stackCount").value),bringBack:$("bringBack").checked,avoidOpposingDST:$("avoidOpposingDST").checked};
 }
 let generationWorker=null,cancelGeneration=null,generationVersion=0;
 function resetLineups(message="Player selections changed. Generate new lineups."){
@@ -228,7 +268,7 @@ function resetLineups(message="Player selections changed. Generate new lineups."
 
 async function generate(){
  const count=Number($("num").value);
- const settings=optimizerSettings(),{minUnique}=settings;
+ const settings=optimizerSettings(),{minUnique}=settings,engine=currentEngine();
  if(!Number.isInteger(count)||count<1||count>150){
   $("results").textContent="Choose between 1 and 150 lineups.";return;
  }
@@ -249,16 +289,16 @@ async function generate(){
   lineups=result.lineups.map(ids=>ids.map(id=>byId.get(id)));
   for(const [i,lineup] of lineups.entries()){
    if(lineup.some(p=>!p))throw Error("The player pool changed. Generate new lineups.");
-   const errors=Classic.validate(lineup,pool);
+   const errors=engine.validate(lineup,pool);
    if(errors.length)throw Error(`Lineup ${i+1}: ${errors.join(" ")}`);
   }
   for(let i=0;i<lineups.length;i++){
-   const ids=new Set(lineups[i].map(p=>p.id));
-   for(let j=0;j<i;j++)if(lineups[j].filter(p=>ids.has(p.id)).length>9-minUnique)throw Error("Lineups did not meet the minimum player difference. Generate again.");
+   const ids=new Set(lineups[i].map(engine.identity));
+   for(let j=0;j<i;j++)if(lineups[j].filter(p=>ids.has(engine.identity(p))).length>engine.size-minUnique)throw Error("Lineups did not meet the minimum player difference. Generate again.");
   }
-  const portfolioErrors=Classic.validatePortfolio(lineups,pool,settings);
+  const portfolioErrors=engine.validatePortfolio(lineups,pool,settings);
   if(portfolioErrors.length)throw Error(portfolioErrors.join(" "));
-  if(new Set(lineups.map(Classic.key)).size!==lineups.length)throw Error("The search returned a duplicate lineup. Generate again.");
+  if(new Set(lineups.map(engine.key)).size!==lineups.length)throw Error("The search returned a duplicate lineup. Generate again.");
   lineups.sort((a,b)=>
    b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
   );
@@ -270,12 +310,12 @@ async function generate(){
   $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
    const salary=l.reduce((s,p)=>s+p.salary,0);
    const points=l.reduce((s,p)=>s+p.proj,0);
-   const firstIds=new Set(lineups[0].map(p=>p.id));
-   const different=9-l.filter(p=>firstIds.has(p.id)).length;
+   const firstIds=new Set(lineups[0].map(engine.identity));
+   const different=engine.size-l.filter(p=>firstIds.has(engine.identity(p))).length;
    return `<div class="lineup"><strong>Lineup ${i+1}</strong>${i?` <small>${different} players different from Lineup 1</small>`:""}
    <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
-   <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
-  }).join(""):"No valid lineup found. Check locks, exclusions, positional availability, the $50,000 cap, and the two-game minimum. The bounded search may miss feasible lineups.";
+   <div>${l.map(p=>safe(p.name)+" ("+(p.rosterSlot?p.rosterSlot+" · ":"")+p.pos+")").join(" • ")}</div></div>`;
+  }).join(""):"No valid lineup found. Check locks, exposures, exclusions, roster availability, the $50,000 cap, and game/team requirements. The bounded search may miss feasible lineups.";
  }catch(error){
   if(version===generationVersion){lineups=[];$("generated").textContent="0";$("results").textContent="Generation failed: "+error.message}
  }finally{
@@ -290,11 +330,11 @@ async function generate(){
 function exportCSV(){
  if(!lineups.length){alert("Generate lineups first.");return}
  let csv;
- try{csv=Classic.exportCSV(lineups,pool,optimizerSettings())}
+ try{csv=currentEngine().exportCSV(lineups,pool,optimizerSettings())}
  catch(error){$("results").textContent="Export failed: "+error.message;return}
  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
  const a=document.createElement("a");
- a.href=url;a.download="dfs-pro-lineups.csv";a.click();
+ a.href=url;a.download=currentEngine().format==="showdown"?"dfs-pro-showdown-lineups.csv":"dfs-pro-lineups.csv";a.click();
  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
@@ -302,19 +342,20 @@ $("players").addEventListener("change",e=>{
  const input=e.target;
  const p=pool.find(x=>x.id===Number(input.dataset.id));
  if(!p)return;
+ const related=pool.filter(other=>currentEngine().identity(other)===currentEngine().identity(p));
  if(input.dataset.action==="projection"){
   const value=Number(input.value);
-  if(!input.value.trim()||!Number.isFinite(value)||Math.abs(value)>1000){
-   $("status").textContent="Projection must be a number between -1000 and 1000. The previous value was kept.";render();return;
+  if(!input.value.trim()||!Number.isFinite(value)||Math.abs(value)>1000*(p.projectionMultiplier||1)){
+   $("status").textContent=`Projection must be a number between ${-1000*(p.projectionMultiplier||1)} and ${1000*(p.projectionMultiplier||1)}. The previous value was kept.`;render();return;
   }
-  p.projectionOverride=value;p.proj=value;
+  for(const other of related){const adjusted=value/(p.projectionMultiplier||1)*(other.projectionMultiplier||1);other.projectionOverride=adjusted;other.proj=adjusted}
  }else if(["minExposure","maxExposure"].includes(input.dataset.action)){
-  if(input.value.trim()==="")delete p[input.dataset.action];
-  else p[input.dataset.action]=Number(input.value);
+  for(const other of related){if(input.value.trim()==="")delete other[input.dataset.action];else other[input.dataset.action]=Number(input.value)}
  }else if(input.dataset.action==="lock"){
-  p.locked=input.checked;if(p.locked)p.excluded=false;
+  if(input.checked){for(const other of related){other.locked=false;other.excluded=false}}
+  p.locked=input.checked;
  }else{
-  p.excluded=input.checked;if(p.excluded)p.locked=false;
+  for(const other of related){other.excluded=input.checked;if(other.excluded)other.locked=false}
  }
  resetLineups();
  render();
@@ -323,18 +364,22 @@ $("players").addEventListener("click",e=>{
  const input=e.target;
  if(input.dataset.action!=="resetProjection")return;
  const p=pool.find(p=>p.id===Number(input.dataset.id));if(!p)return;
- delete p.projectionOverride;p.proj=p.baseProjection??p.csvAverage??0;
+ for(const other of pool.filter(other=>currentEngine().identity(other)===currentEngine().identity(p))){delete other.projectionOverride;other.proj=other.baseProjection??other.csvAverage??0}
  resetLineups("Manual projection removed. Generate new lineups.");
 });
 $("resetProjections").addEventListener("click",()=>{
  for(const p of pool){delete p.projectionOverride;p.proj=p.baseProjection??p.csvAverage??0}
  resetLineups("Manual projections reset to the latest loaded data. Generate new lineups.");
 });
+$("contestFormat").addEventListener("change",()=>setContestContext($("contestFormat").value,$("slateType").value));
+$("slateType").addEventListener("change",()=>setContestContext($("contestFormat").value,$("slateType").value));
+$("providerSlate").addEventListener("change",()=>{pool=[];$("csvStatus").textContent="Select the matching DraftKings salary CSV for this provider slate.";resetLineups("Provider slate changed. Import its matching DraftKings CSV.")});
 $("minUnique").addEventListener("input",()=>resetLineups("Minimum player difference changed. Generate new lineups."));
 for(const id of ["globalMaxExposure","stackCount","bringBack","avoidOpposingDST"]){
  $(id).addEventListener("change",()=>resetLineups("Exposure or stacking settings changed. Generate new lineups."));
 }
 $("num").addEventListener("input",()=>resetLineups("Lineup count changed. Generate new lineups."));
+for(const id of ["season","week"])$(id).addEventListener("change",()=>{slateCatalog=[];renderSlateChoices()});
 $("search").addEventListener("input",render);
 $("position").addEventListener("change",render);
 $("generate").addEventListener("click",generate);
@@ -366,7 +411,9 @@ async function capturePreset(){
  return Profiles.capture(pool.map(p=>({...p})),presetControls(),$("presetName").value.trim());
 }
 async function loadPreset(raw){
- const version=++presetLoadVersion,target=pool,profile=Profiles.validate(raw);
+ const version=++presetLoadVersion,profile=Profiles.validate(raw);
+ setContestContext(profile.settings.contestFormat,profile.settings.slateType);
+ const target=pool;
  const matching=await Profiles.matches(target,profile);
  if(version!==presetLoadVersion||pool!==target)return;
  if(matching)await Profiles.applyPlayers(target,profile);
@@ -518,7 +565,7 @@ $("projections").addEventListener("click", async () => {
       ].join("|");
 
       if (projectionMap.has(key)) {
-        player.baseProjection = projectionMap.get(key);
+        player.baseProjection = projectionMap.get(key)*(player.projectionMultiplier||1);
         player.projectionSource="SportsDataIO";
         player.hasProjection = true;
         matched++;
@@ -549,17 +596,16 @@ $("projections").addEventListener("click", async () => {
 
  
 $("load").addEventListener("click",async()=>{
- const season=$("season").value,week=$("week").value;
- $("status").textContent="Contacting SportsDataIO backend...";
+ const season=$("season").value,week=$("week").value,requestId=++slateRequestId;
+ $("status").textContent="Loading available DraftKings slates…";
  try{
-  const response=await fetch(`/api/slates/${season}/${week}`);
-  const data=await response.json();
+  const response=await fetch(`/api/slates/${season}/${week}`),data=await response.json();
+  if(requestId!==slateRequestId||season!==$("season").value||week!==$("week").value)return;
   if(!response.ok)throw Error(data.error||"API request failed");
-  $("status").textContent=
-   `SportsDataIO returned ${Array.isArray(data)?data.length:"a"} slate record(s). Player mapping is the next integration step.`;
- }catch(e){
-  $("status").textContent="API test failed: "+e.message;
- }
+  slateCatalog=Slates.normalize(data);renderSlateChoices();
+  const available=slateCatalog.filter(s=>s.format===contestContext.contestFormat&&(contestContext.slateType==="custom"||s.type===contestContext.slateType));
+  $("status").textContent=`${available.length} matching DraftKings slate(s) available. Choose one above and import its official DK salary file. If your slate is not listed, use the matching CSV directly; the feed may have limited availability.`;
+ }catch(error){$("status").textContent="Slate loading failed: "+error.message+" You can still import the matching DK salary CSV directly."}
 });
 
 function parseCSV(text) {
@@ -608,7 +654,10 @@ $("importCSV").addEventListener("click", async () => {
   }
 
   try {
-    const imported = Classic.importRows(parseCSV(await file.text()));
+    const context={...contestContext},provider=selectedProviderSlate(),providerId=$("providerSlate").value,engine=currentEngine();
+    const imported = engine.importRows(parseCSV(await file.text()));
+    if(context.contestFormat!==contestContext.contestFormat||context.slateType!==contestContext.slateType||providerId!==$("providerSlate").value)throw Error("Slate selection changed. Import the selected slate again.");
+    const slateValidation=Slates.validatePool(imported,{format:context.contestFormat,slateType:context.slateType},provider);
 
     pool = imported;
     resetLineups("Players imported. Generate lineups.");
@@ -616,8 +665,9 @@ $("importCSV").addEventListener("click", async () => {
     $("count").textContent = pool.length;
 
     $("csvStatus").textContent =
-      `Imported ${pool.length} DraftKings players from ${file.name}. ` +
-      `${pool.filter(p=>p.excluded).length} players excluded by default based on supplied OUT/IR/PUP/NFI/suspension statuses. Review current news; you can change exclusions manually.`;
+      `Imported ${pool.length} salary entries (${new Set(pool.map(currentEngine().identity)).size} players) from ${file.name} for ${currentEngine().label}. ` +
+      (provider&&!slateValidation.providerIDsVerified?"Provider metadata only; player eligibility is based on your official CSV. ":"") +
+      `${pool.filter(p=>p.excluded).length} salary entries excluded by default based on supplied OUT/IR/PUP/NFI/suspension statuses. Review current news; you can change exclusions manually.`;
 
     $("status").textContent =
       "DraftKings CSV loaded. Average points are not future projections.";

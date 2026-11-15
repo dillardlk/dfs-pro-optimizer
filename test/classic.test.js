@@ -4,6 +4,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const Classic=require('../public/classic');
 const Profiles=require('../public/profiles');
+const Slates=require('../public/slates');
 const headers=['Position','Name','ID','Roster Position','Salary','Game Info','TeamAbbrev','AvgPointsPerGame'];
 const positions=['QB','RB','RB','WR','WR','WR','TE','RB','DST'];
 const rows=()=>[[...headers],...positions.map((pos,i)=>[pos,`Player ${i}`,`${100000+i}`,['RB','WR','TE'].includes(pos)?`${pos}/FLEX`:pos,'5000',i%2?'BUF@NYJ 11/22/2099 01:00PM ET':'KC@DEN 11/22/2099 04:25PM ET',i%2?'BUF':'KC','12'])];
@@ -70,11 +71,11 @@ function browser(options={}){
   if(typeof value==='boolean')get(id).checked=value;else get(id).value=String(value);
  }
  get('minUnique').value='1';get('presetName').value='My NFL Classic';
- const context=vm.createContext({Classic,Profiles,localStorage,location:options.location||{origin:'https://dfs.example',pathname:'/',hash:''},navigator:{clipboard:{writeText:async value=>{get('clipboard').value=value}}},document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
+ const context=vm.createContext({Classic,Profiles,Slates,localStorage,location:options.location||{origin:'https://dfs.example',pathname:'/',hash:''},navigator:{clipboard:{writeText:async value=>{get('clipboard').value=value}}},document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
   terminate(){this.stopped=true}
   postMessage({pool,count,...settings}){queueMicrotask(()=>{
    if(this.stopped)return;
-   try{const r=Classic.generate(pool,count,settings);this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
+   try{const engine=settings.contestFormat==='showdown'?Classic.Showdown:Classic;const r=engine.generate(pool,count,settings);this.onmessage({data:{lineups:r.lineups.map(l=>l.map(p=>p.id)),limited:r.limited}})}
    catch(error){this.onmessage({data:{error:error.message}})}
   })}
  }});
@@ -365,4 +366,59 @@ test('desktop saved settings link applies on another browser after the matching 
  reopened.context.fixture=pool();reopened.run('pool=fixture');
  reopened.get('savedPresets').value='My mobile rules';await reopened.get('loadPreset').click();
  assert.equal(reopened.run('pool[0].proj'),30);assert.equal(reopened.get('globalMaxExposure').value,'60');
+});
+test('Showdown UI imports a role-specific file and synchronizes edits, exclusions and exposure by person',async()=>{
+ const b=browser();await b.ready;
+ b.get('contestFormat').value='showdown';b.get('contestFormat').change();
+ assert.equal(b.run('pool.length'),0);assert.equal(b.get('slateType').value,'single');assert.equal(b.get('minUnique').max,6);
+ const source=require('../test-support/showdown-fixture.cjs')();
+ b.get('csvFile').files=[{name:'Showdown.csv',text:async()=>source.map(r=>r.join(',')).join('\r\n')}];
+ await b.get('importCSV').click();assert.equal(b.run('pool.length'),32);
+ b.get('players').change({target:{dataset:{id:'2',action:'projection'},value:'24'}});
+ assert.equal(b.run('pool[0].proj'),36);assert.equal(b.run('pool[1].proj'),24);
+ b.get('players').change({target:{dataset:{id:'1',action:'maxExposure'},value:'60'}});
+ assert.equal(b.run('pool[0].maxExposure'),60);assert.equal(b.run('pool[1].maxExposure'),60);
+ b.get('players').change({target:{dataset:{id:'2',action:'lock'},checked:true}});
+ assert.equal(b.run('pool[1].locked'),true);assert.equal(b.run('pool[0].locked'),false);
+ b.get('players').change({target:{dataset:{id:'1',action:'lock'},checked:true}});
+ assert.equal(b.run('pool[0].locked'),true);assert.equal(b.run('pool[1].locked'),false);
+ b.get('players').change({target:{dataset:{id:'1',action:'lock'},checked:false}});
+ b.get('num').value='10';b.get('minUnique').value='2';
+ await b.run('generate()');assert.equal(b.run('lineups.length'),10);
+ assert.deepEqual(Classic.Showdown.validatePortfolio(b.run('lineups'),b.run('pool'),{minUnique:2}),[]);
+ b.get('contestFormat').value='classic';b.get('contestFormat').change();
+ assert.equal(b.run('pool.length'),0);assert.equal(b.run('lineups.length'),0);
+});
+test('Showdown presets restore contest format and defer matching-slate edits across browsers',async()=>{
+ const b=browser();await b.ready;
+ b.get('contestFormat').value='showdown';b.get('contestFormat').change();
+ const source=require('../test-support/showdown-fixture.cjs')();
+ b.get('csvFile').files=[{name:'Showdown.csv',text:async()=>source.map(r=>r.join(',')).join('\r\n')}];
+ await b.get('importCSV').click();
+ b.get('players').change({target:{dataset:{id:'2',action:'projection'},value:'27'}});
+ await b.get('sharePreset').click();
+ const link=b.get('clipboard').value;
+ const other=browser({location:{origin:'https://dfs.example',pathname:'/',hash:link.slice(link.indexOf('#'))}});await other.ready;
+ assert.equal(other.get('contestFormat').value,'showdown');assert.equal(other.run('pool.length'),0);
+ other.get('csvFile').files=b.get('csvFile').files;await other.get('importCSV').click();
+ assert.equal(other.run('pool[0].proj'),40.5);assert.equal(other.run('pool[1].proj'),27);
+ other.get('slateType').value='early';other.get('contestFormat').value='classic';other.get('contestFormat').change();
+ assert.equal(other.run('pendingPreset'),null);
+});
+test('available slate loading populates real metadata and preserves direct CSV fallback',async()=>{
+ const b=browser();await b.ready;
+ b.context.fetch=async()=>({ok:true,json:async()=>[{Operator:'DraftKings',SalaryCap:50000,SlateID:55,OperatorName:'Main',SlateRosterSlots:Classic.slots,NumberOfGames:10,DfsSlatePlayers:[]}]});
+ await b.get('load').click();assert.match(b.get('providerSlate').innerHTML,/Main/);assert.match(b.get('status').textContent,/1 matching DraftKings/);
+ b.get('slateType').value='late';b.get('slateType').change();
+ assert.equal(b.run('pool.length'),0);assert.equal(b.get('providerSlate').value,'');
+ assert.match(b.get('providerSlate').innerHTML,/Use imported CSV/);
+});
+test('an in-flight CSV import cannot overwrite a newly selected provider slate',async()=>{
+ const b=browser();await b.ready;
+ let finish;
+ b.get('csvFile').files=[{name:'Classic.csv',text:()=>new Promise(resolve=>{finish=resolve})}];
+ const pending=b.get('importCSV').click();
+ b.get('providerSlate').value='different';b.get('providerSlate').change();
+ finish(rows().map(r=>r.join(',')).join('\r\n'));await pending;
+ assert.equal(b.run('pool.length'),0);assert.match(b.get('csvStatus').textContent,/Slate selection changed/);
 });

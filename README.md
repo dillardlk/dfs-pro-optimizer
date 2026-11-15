@@ -1,6 +1,6 @@
 # DFS Pro Optimizer
 
-DraftKings NFL Classic lineup builder using Node.js, Express and browser JavaScript. The existing Render start command remains `npm start`. Configure `SPORTSDATAIO_API_KEY` only in the server environment; never put it in browser code or commit it.
+DraftKings NFL Classic and Showdown Captain Mode lineup builder using Node.js, Express and browser JavaScript. The existing Render start command remains `npm start`. Configure `SPORTSDATAIO_API_KEY` only in the server environment; never put it in browser code or commit it.
 
 ## Local use
 
@@ -40,3 +40,11 @@ Tests exercise salary-cap boundaries, roster and FLEX assignment, duplicate play
 Edit player projections in the table; manual values persist when SportsDataIO data is refreshed and can be reset to the latest base projection. Named presets can store optimizer rules and matching-slate player overrides. Private account presets use Supabase Auth and PostgreSQL, with owner-only row-level security. Sign in on desktop and iPad, save to your account, then load that preset on the other device. Unsaved changes are not automatically overwritten. Browser presets and link/JSON snapshots are optional backups.
 
 See [private settings setup](docs/cloud-settings.md) for the database migration, required Render environment values, authentication redirects, and privacy tests. Cloud controls remain explicitly disabled until that service is configured. The SportsDataIO key and existing Render start command are unchanged.
+
+## NFL formats and game slates
+
+Choose **Classic** with Main, Early, Late or a custom game slate, or choose **Showdown Captain Mode** for a single game. Import the exact official DK salary file for that contest. Changing a format or game-slate category clears the prior pool and lineups. The SportsDataIO catalog lists only supported DraftKings formats actually returned by the feed; direct CSV import remains available when coverage is limited.
+
+Showdown uses 1 Captain and 5 FLEX players, a $50,000 cap, both teams and unique people across roles. Captain salary is read from its own CSV row and validated as 1.5× FLEX salary; projected Captain points are 1.5× base points. Captain and FLEX use separate imported DK IDs. Exposures and minimum player differences count people across roles. Existing Classic presets default to Classic, while new presets also save the format and slate category.
+
+See [slate and format details](docs/slate-formats.md) for importing, validation and CSV export behavior.

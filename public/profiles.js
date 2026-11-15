@@ -1,15 +1,17 @@
 (function(root){
 'use strict';
 const STORAGE_KEY='dfs-classic-presets-v1';
-const controlDefaults={num:10,minUnique:3,globalMaxExposure:100,stackCount:0,bringBack:false,avoidOpposingDST:false,season:2026,week:11};
+const controlDefaults={contestFormat:'classic',slateType:'main',num:10,minUnique:3,globalMaxExposure:100,stackCount:0,bringBack:false,avoidOpposingDST:false,season:2026,week:11};
 function checkNumber(value,min,max,label,integer=true){
  if(typeof value!=='number'||!Number.isFinite(value)||(integer&&!Number.isInteger(value))||value<min||value>max)throw Error(`${label} must be ${integer?'a whole number':'a number'} between ${min} and ${max}.`);
  return value;
 }
 function validate(raw){
  if(!raw||raw.version!==1||typeof raw.name!=='string'||!raw.name.trim()||raw.name.length>80)throw Error('Invalid or unsupported settings file.');
- const settings={};
- const ranges={num:[1,150],minUnique:[1,9],globalMaxExposure:[0,100],stackCount:[0,2],season:[2020,2100],week:[1,22]};
+ const settings={contestFormat:raw.settings?.contestFormat??'classic',slateType:raw.settings?.slateType??'main'};
+ if(!['classic','showdown'].includes(settings.contestFormat)||!['main','early','late','custom','single'].includes(settings.slateType))throw Error('Unsupported contest format or slate type.');
+ if(settings.contestFormat==='showdown')settings.slateType='single';
+ const ranges={num:[1,150],minUnique:[1,settings.contestFormat==='showdown'?6:9],globalMaxExposure:[0,100],stackCount:[0,2],season:[2020,2100],week:[1,22]};
  if(!raw.settings||typeof raw.settings!=='object')throw Error('Settings are missing.');
  for(const [key,[min,max]] of Object.entries(ranges))settings[key]=checkNumber(raw.settings[key],min,max,key);
  for(const key of ['bringBack','avoidOpposingDST']){
@@ -37,7 +39,7 @@ function validate(raw){
 }
 async function fingerprint(pool){
  if(!pool.length||pool.some(p=>p.source!=='dk'))return null;
- const content=JSON.stringify(pool.map(p=>[p.dkId,p.salary,p.pos,p.team,p.game]).sort((a,b)=>a[0].localeCompare(b[0])));
+ const content=JSON.stringify(pool.map(p=>(p.rosterSlot?[p.dkId,p.salary,p.pos,p.team,p.game,p.rosterSlot]:[p.dkId,p.salary,p.pos,p.team,p.game])).sort((a,b)=>a[0].localeCompare(b[0])));
  const bytes=await root.crypto.subtle.digest('SHA-256',new TextEncoder().encode(content));
  return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');
 }
@@ -45,7 +47,7 @@ async function capture(pool,settings,name){
  const slate=await fingerprint(pool);
  const players=slate?pool.flatMap(p=>{
   const row={dkId:p.dkId};
-  if(p.projectionOverride!==undefined)row.projection=p.projectionOverride;
+  if(p.projectionOverride!==undefined)row.projection=p.projectionOverride/(p.projectionMultiplier||1);
   if(p.minExposure!==undefined)row.minExposure=p.minExposure;
   if(p.maxExposure!==undefined)row.maxExposure=p.maxExposure;
   if(p.locked)row.locked=true;
@@ -71,7 +73,7 @@ async function applyPlayers(pool,raw){
  for(const row of profile.players){
   const p=byId.get(row.dkId);
   for(const key of ['minExposure','maxExposure','locked','excluded'])if(row[key]!==undefined)p[key]=row[key];
-  if(row.projection!==undefined){p.projectionOverride=row.projection;p.proj=row.projection}
+  if(row.projection!==undefined){p.projectionOverride=row.projection*(p.projectionMultiplier||1);p.proj=p.projectionOverride}
   if(p.locked)p.excluded=false;
  }
  return profile.players.length;

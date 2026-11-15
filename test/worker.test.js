@@ -44,3 +44,12 @@ test('worker enforces exposure, stacking and player differences together',async 
  assert.deepEqual(Classic.validatePortfolio(mapped,p,settings),[]);
  assert.equal(Classic.exportCSV(mapped,p,settings).split('\r\n').length,5);
 });
+test('background worker dispatches Showdown and returns valid six-slot export IDs',async t=>{
+ const w=worker();t.after(()=>w.terminate());
+ const p=Classic.Showdown.importRows(require('../test-support/showdown-fixture.cjs')());
+ const result=await request(w,{pool:p,count:10,contestFormat:'showdown',minUnique:2,globalMaxExposure:60});
+ assert.equal(result.error,undefined);assert.equal(result.lineups.length,10);
+ const mapped=result.lineups.map(l=>l.map(id=>p.find(p=>p.id===id)));
+ assert.deepEqual(Classic.Showdown.validatePortfolio(mapped,p,{minUnique:2,globalMaxExposure:60}),[]);
+ assert.match(Classic.Showdown.exportCSV(mapped,p,{minUnique:2,globalMaxExposure:60}),/^CPT,FLEX,FLEX,FLEX,FLEX,FLEX\r\n/);
+});
