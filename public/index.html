@@ -156,106 +156,65 @@ function render(){
  </tr>`).join("");
 }
 
-function eligible(p,slot){
- return slot==="FLEX"?["RB","WR","TE"].includes(p.pos):p.pos===slot;
-}
-function valid(lineup){return Classic.validate(lineup,pool).length===0;}
+let generationWorker=null,cancelGeneration=null,generationVersion=0;
 function resetLineups(message="Player selections changed. Generate new lineups."){
+ generationVersion++;
+ if(generationWorker){generationWorker.terminate();generationWorker=null}
+ if(cancelGeneration){cancelGeneration();cancelGeneration=null}
+ $("generate").disabled=false;
  lineups=[];
  $("generated").textContent="0";
  $("results").textContent=message;
 }
 
-function buildOne(){
- const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
-   (p.source!=="dk"||p.startsAt>Date.now()));
- const locked=available.filter(p=>p.locked);
- if(locked.some(p=>p.source==="dk"&&p.startsAt<=Date.now()))errors.push("A locked player’s game has already started. Unlock that player or import an upcoming slate.");
- if(locked.length>9)return null;
- let best=null,bestScore=-Infinity;
- // Randomized construction heuristic; not a mathematical optimal solver.
- for(let attempt=0;attempt<500;attempt++){
-  const chosen=[...locked],used=new Set(locked.map(p=>p.id));
-  let salary=chosen.reduce((s,p)=>s+p.salary,0);
-  const order=["QB","DST","TE","RB","RB","WR","WR","WR","FLEX"];
-  // Choose slots for locked players using a small exhaustive search.
-  function placeLocks(i,remaining){
-   if(i===locked.length)return remaining;
-   const p=locked[i];
-   for(let j=0;j<remaining.length;j++){
-    if(!eligible(p,remaining[j]))continue;
-    const next=[...remaining];next.splice(j,1);
-    const found=placeLocks(i+1,next);
-    if(found)return found;
-   }
-   return null;
-  }
-  const open=placeLocks(0,order);
-  if(!open)continue;
-  let failed=false;
-  for(const slot of open){
-   const candidates=available.filter(p=>
-     !used.has(p.id)&&eligible(p,slot)&&salary+p.salary<=50000
-   );
-   if(!candidates.length){failed=true;break}
-   candidates.sort((a,b)=>
-     (b.proj/b.salary+Math.random()*.0008)-
-     (a.proj/a.salary+Math.random()*.0008)
-   );
-   const pick=candidates[Math.floor(Math.random()*Math.min(9,candidates.length))];
-   chosen.push(pick);used.add(pick.id);salary+=pick.salary;
-  }
-  if(failed||!valid(chosen))continue;
-  const score=chosen.reduce((s,p)=>s+p.proj,0);
-  if(score>bestScore){best=[...chosen];bestScore=score}
- }
- return best;
-}
-
-function generate(){
+async function generate(){
  const count=Number($("num").value);
  if(!Number.isInteger(count)||count<1||count>150){
   $("results").textContent="Choose between 1 and 150 lineups.";return;
  }
  if(!pool.length){$("results").textContent="Import DraftKings salaries or load demo players first.";return}
- const locked=pool.filter(p=>p.locked);
- const errors=[];
- const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
-  (p.source!=="dk"||p.startsAt>Date.now()));
- for(const [pos,min] of Object.entries({QB:1,RB:2,WR:3,TE:1,DST:1})){
-  if(available.filter(p=>p.pos===pos).length<min)errors.push(`Not enough eligible ${pos} players; need ${min}.`);
+ resetLineups("Generating lineups…");
+ const version=generationVersion;
+ $("generate").disabled=true;
+ try{
+  const result=await new Promise((resolve,reject)=>{
+   cancelGeneration=()=>resolve(null);
+   generationWorker=new Worker("/optimizer-worker.js");
+   generationWorker.onmessage=({data})=>data.error?reject(Error(data.error)):resolve(data);
+   generationWorker.onerror=()=>reject(Error("Unable to run the lineup generator. Refresh the page and try again."));
+   generationWorker.postMessage({pool,count});
+  });
+  if(version!==generationVersion||!result)return;
+  const byId=new Map(pool.map(p=>[p.id,p]));
+  lineups=result.lineups.map(ids=>ids.map(id=>byId.get(id)));
+  for(const [i,lineup] of lineups.entries()){
+   if(lineup.some(p=>!p))throw Error("The player pool changed. Generate new lineups.");
+   const errors=Classic.validate(lineup,pool);
+   if(errors.length)throw Error(`Lineup ${i+1}: ${errors.join(" ")}`);
+  }
+  if(new Set(lineups.map(Classic.key)).size!==lineups.length)throw Error("The search returned a duplicate lineup. Generate again.");
+  lineups.sort((a,b)=>
+   b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
+  );
+  $("generated").textContent=lineups.length;
+  $("status").textContent=`Generated ${lineups.length} of ${count} requested unique lineups. `+
+    (result.limited?"Search limit applied; results are not guaranteed optimal.":"Search completed.");
+  $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
+   const salary=l.reduce((s,p)=>s+p.salary,0);
+   const points=l.reduce((s,p)=>s+p.proj,0);
+   return `<div class="lineup"><strong>Lineup ${i+1}</strong>
+   <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
+   <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
+  }).join(""):"No valid lineup found. Check locks, exclusions, positional availability, the $50,000 cap, and the two-game minimum. The bounded search may miss feasible lineups.";
+ }catch(error){
+  if(version===generationVersion){lineups=[];$("generated").textContent="0";$("results").textContent="Generation failed: "+error.message}
+ }finally{
+  if(version===generationVersion){
+   if(generationWorker)generationWorker.terminate();
+   generationWorker=null;cancelGeneration=null;$("generate").disabled=false;
+  }
  }
- if(available.filter(p=>["RB","WR","TE"].includes(p.pos)).length<7)errors.push("Need at least 7 eligible RB/WR/TE players including FLEX.");
- if(pool.some(p=>p.source==="dk")&&new Set(available.map(p=>p.game)).size<2)errors.push("Eligible players must span at least two games.");
- if(locked.some(p=>p.source==="dk"&&p.startsAt<=Date.now()))errors.push("A locked player’s game has already started. Unlock that player or import an upcoming slate.");
- if(locked.length>9)errors.push("You have locked more than 9 players.");
- if(locked.reduce((s,p)=>s+p.salary,0)>50000)errors.push("Locked players exceed the $50,000 salary cap.");
- for(const [pos,max] of Object.entries({QB:1,RB:3,WR:4,TE:2,DST:1})){
-  if(locked.filter(p=>p.pos===pos).length>max)errors.push(`Too many locked ${pos} players.`);
- }
- if(locked.filter(p=>["RB","WR","TE"].includes(p.pos)).length>7)errors.push("Only 7 RB/WR/TE players fit the roster.");
- if(errors.length){resetLineups(errors.join(" "));return}
- lineups=[];
- const seen=new Set();
- for(let i=0;i<count*15&&lineups.length<count;i++){
-  const lineup=buildOne();
-  if(!lineup)break;
-  const key=Classic.key(lineup);
-  if(seen.has(key))continue;
-  seen.add(key);lineups.push(Classic.order(lineup));
- }
- lineups.sort((a,b)=>
-  b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
- );
- $("generated").textContent=lineups.length;
- if(lineups.length&&lineups.length<count)$("status").textContent=`Generated ${lineups.length} of ${count} requested unique lineups. Constraints or search limits prevented more results.`;
- $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
-  const salary=l.reduce((s,p)=>s+p.salary,0);
-  const points=l.reduce((s,p)=>s+p.proj,0);
-  return `<div class="lineup"><strong>Lineup ${i+1}</strong>
-  <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
-  <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
- }).join(""):"No valid lineup found. Check locks, exclusions, positional availability, the $50,000 cap, and the two-game minimum. The randomized generator may miss feasible lineups.";
+
 }
 
 function exportCSV(){
@@ -383,10 +342,7 @@ $("projections").addEventListener("click", async () => {
       }
     }
 
-    lineups = [];
-    $("generated").textContent = "0";
-    $("results").textContent =
-      "Projections updated. Generate new lineups.";
+    resetLineups("Projections updated. Generate new lineups.");
 
     render();
 
@@ -465,9 +421,7 @@ $("importCSV").addEventListener("click", async () => {
     const imported = Classic.importRows(parseCSV(await file.text()));
 
     pool = imported;
-    lineups = [];
-    $("generated").textContent = "0";
-    $("results").textContent = "Players imported. Generate lineups.";
+    resetLineups("Players imported. Generate lineups.");
     $("count").textContent = pool.length;
 
     $("csvStatus").textContent =

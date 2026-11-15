@@ -15,11 +15,13 @@ Exports contain one lineup per row with headers `QB,RB,RB,WR,WR,WR,TE,FLEX,DST` 
 
 The imported file defines the slate. Use a fresh matching file when DraftKings changes its player pool; this app does not independently fetch live DraftKings contest eligibility or verify the contest associated with an uploaded file. Game Info is interpreted in America/New_York time; players whose scheduled games have started cannot be generated or exported. Late swap of existing entries is not supported.
 
-The existing randomized generator remains a heuristic: it can return fewer lineups than requested and does not guarantee a mathematical optimum or find every feasible lineup. Exports are revalidated before downloading.
+The generator uses a deterministic, bounded beam search in a background Web Worker. It precomputes salary-aware estimates for remaining roster slots, reserves enough salary to finish, and ranks partial lineups by projected points plus an optimistic estimate for remaining slots. This keeps the interface responsive and avoids repeatedly sorting the full player pool. The Generate button is disabled during a search; changing the pool, locks, exclusions or projections cancels pending work so old results cannot replace current selections. Modern browser Web Worker support is required.
+
+This remains a heuristic: the search width is bounded, so it can return fewer lineups than requested and does not guarantee a mathematical optimum or find every feasible lineup. Repeating the same inputs produces the same results. The UI reports when a search limit was applied. Results are validated on the main thread against the current pool and again before CSV export.
 
 ## References
 
 - [DraftKings NFL Classic rules](https://lp.draftkings.com/help/rules/nfl/classic)
 - [DraftKings CSV upload instructions](https://support.draftkings.com/dk/en-us/how-do-i-upload-or-edit-multiple-lineups-at-once?id=kb_article_view&sysparm_article=KB0010800)
 
-Tests exercise salary-cap boundaries, roster and FLEX assignment, duplicate players and lineup permutations, slate membership, import errors, start times across Eastern standard/daylight time, CSV parsing, generator behavior, selection invalidation, and the import/projection event handlers. These tests run JavaScript with a simulated DOM; they do not log into DraftKings or call the paid SportsDataIO service.
+Tests exercise salary-cap boundaries, roster and FLEX assignment, duplicate players and lineup permutations, slate membership, import errors, start times across Eastern standard/daylight time, CSV parsing, generator behavior, selection invalidation, and the import/projection event handlers. Additional tests compare search scores against exhaustive enumeration on small pools (including non-$100 salaries), verify lock/FLEX and budget constraints, cancellation, and run the shipped worker scripts in a real background thread. The interface tests run JavaScript with a simulated DOM; they do not log into DraftKings or call the paid SportsDataIO service.

@@ -96,6 +96,116 @@ function orderForPool(pool){
  const remaining=[...pool];
  for(const slot of slots){const i=remaining.findIndex(p=>eligible(p,slot));if(i<0)return false;remaining.splice(i,1)}return true;
 }
-const api={slots,eligible,key,order,validate,exportCSV,importRows};
+// Bounded beam search. Relaxed suffix scores rank partial lineups while
+// preserving enough salary to finish; duplicate choices in the relaxation
+// make it optimistic. Final results always pass the full Classic validator.
+function generate(pool,count,{now=Date.now(),beamWidth=Math.max(300,count*8)}={}){
+ if(!Number.isInteger(count)||count<1||count>150)throw Error('Choose between 1 and 150 lineups.');
+ if(!Number.isInteger(beamWidth)||beamWidth<1||beamWidth>5000)throw Error('Invalid search width.');
+ const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
+  Number.isInteger(p.salary)&&p.salary>0&&p.salary<=50000&&
+  (p.source!=='dk'||p.startsAt>now));
+ if(new Set(available.map(identity)).size!==available.length)throw Error('The player pool contains duplicate player IDs. Reimport salaries.');
+ const locked=pool.filter(p=>p.locked);
+ if(locked.some(p=>!available.includes(p)))throw Error('A locked player is excluded, has invalid data, or their game has started.');
+ if(locked.length>9)throw Error('You have locked more than 9 players.');
+ const lockedSalary=locked.reduce((s,p)=>s+p.salary,0);
+ if(lockedSalary>50000)throw Error('Locked players exceed the $50,000 salary cap.');
+ const slotOrder=['QB','DST','TE','RB','RB','WR','WR','WR','FLEX'];
+ function placeLocks(i,open){
+  if(i===locked.length)return open;
+  for(let j=0;j<open.length;j++)if(eligible(locked[i],open[j])){
+   const next=open.slice();next.splice(j,1);
+   const result=placeLocks(i+1,next);if(result)return result;
+  }
+  return null;
+ }
+ const open=placeLocks(0,slotOrder);
+ if(!open)throw Error('Locked players cannot fit QB, 2 RB, 3 WR, TE, FLEX, DST.');
+ const unlocked=available.filter(p=>!p.locked);
+ for(const pos of new Set(open.filter(s=>s!=='FLEX'))){
+  const needed=open.filter(s=>s===pos).length;
+  if(unlocked.filter(p=>p.pos===pos).length<needed)throw Error(`Not enough eligible ${pos} players; need ${needed}.`);
+ }
+ if(unlocked.filter(p=>['RB','WR','TE'].includes(p.pos)).length<open.filter(s=>['RB','WR','TE','FLEX'].includes(s)).length)throw Error('Not enough eligible RB/WR/TE players including FLEX.');
+ const imported=pool.some(p=>p.source==='dk');
+ const group=p=>imported?p.game:p.team;
+ if(new Set(available.map(group)).size<2)throw Error('Eligible players must span at least two games (two teams in demo mode).');
+ const candidates=open.map(slot=>unlocked.filter(p=>eligible(p,slot)));
+ // Salary units remain exact even for non-$100 salaries.
+ const gcd=(a,b)=>b?gcd(b,a%b):a;
+ const unit=available.reduce((n,p)=>gcd(n,p.salary),50000);
+ const budget=(50000-lockedSalary)/unit;
+ const suffix=Array(open.length+1);
+ suffix[open.length]=new Float64Array(budget+1);
+ for(let depth=open.length-1;depth>=0;depth--){
+  const bestAtSalary=new Map();
+  for(const p of candidates[depth]){
+   const cost=p.salary/unit;
+   if(!bestAtSalary.has(cost)||bestAtSalary.get(cost)<p.proj)bestAtSalary.set(cost,p.proj);
+  }
+  const values=new Float64Array(budget+1);values.fill(-Infinity);
+  for(const [cost,points] of bestAtSalary){
+   for(let b=cost;b<=budget;b++)values[b]=Math.max(values[b],points+suffix[depth+1][b-cost]);
+  }
+  suffix[depth]=values;
+ }
+ if(suffix[0][budget]===-Infinity)throw Error('No lineup fits the $50,000 salary cap with these selections.');
+ const baseScore=locked.reduce((s,p)=>s+p.proj,0);
+ let beam=[{players:locked.slice(),used:new Set(locked.map(identity)),salary:lockedSalary,score:baseScore,bound:baseScore+suffix[0][budget],last:-1}];
+ let examined=0,pruned=false;
+ // A min-heap keeps only the strongest partial lineups without sorting
+ // every candidate expansion. Tie-breaking is stable and deterministic.
+ const better=(a,b)=>a.bound>b.bound||(a.bound===b.bound&&(a.score>b.score||(a.score===b.score&&a.salary<b.salary)));
+ for(let depth=0;depth<open.length;depth++){
+  const heap=[];
+  function retain(state){
+   if(heap.length>=beamWidth){
+    pruned=true;
+    if(!better(state,heap[0]))return;
+    heap[0]=state;
+    let i=0;
+    while(true){let j=i*2+1;if(j>=heap.length)break;
+     if(j+1<heap.length&&better(heap[j],heap[j+1]))j++;
+     if(!better(heap[i],heap[j]))break;
+     [heap[i],heap[j]]=[heap[j],heap[i]];i=j;
+    }
+   }else{
+    heap.push(state);let i=heap.length-1;
+    while(i>0){const j=(i-1)>>1;if(!better(heap[j],heap[i]))break;
+     [heap[i],heap[j]]=[heap[j],heap[i]];i=j;
+    }
+   }
+  }
+  const seen=new Set();
+  for(const state of beam){
+   for(let index=0;index<candidates[depth].length;index++){
+    const p=candidates[depth][index];examined++;
+    if(depth>0&&open[depth]===open[depth-1]&&index<=state.last)continue;
+    const id=identity(p);if(state.used.has(id))continue;
+    const salary=state.salary+p.salary;
+    if(salary>50000)continue;
+    const future=suffix[depth+1][(50000-salary)/unit];
+    if(future===-Infinity)continue;
+    const score=state.score+p.proj,bound=score+future;
+    if(heap.length>=beamWidth&&!better({bound,score,salary},heap[0])){pruned=true;continue}
+    const players=[...state.players,p];
+    const groups=new Set(players.map(group));
+    if(groups.size<2&&!candidates.slice(depth+1).some(list=>list.some(next=>!state.used.has(identity(next))&&identity(next)!==id&&group(next)!==group(p))))continue;
+    const fingerprint=key(players);if(seen.has(fingerprint))continue;
+    seen.add(fingerprint);
+    if(depth===open.length-1&&validate(players,pool,{now}).length)continue;
+    retain({players,used:new Set([...state.used,id]),salary,score,bound,last:index});
+   }
+  }
+  beam=heap;
+  if(!beam.length)break;
+ }
+ const lineups=beam.filter(s=>s.players.length===9&&!validate(s.players,pool,{now}).length)
+  .sort((a,b)=>b.score-a.score||a.salary-b.salary).slice(0,count).map(s=>order(s.players));
+ return {lineups,examined,limited:pruned};
+}
+
+const api={slots,eligible,key,order,validate,exportCSV,importRows,generate};
 if(typeof module==='object'&&module.exports)module.exports=api;else root.Classic=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
