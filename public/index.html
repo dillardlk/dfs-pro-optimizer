@@ -60,6 +60,7 @@ small,.muted{color:#aabbd0}
   
 <button id="projections">Load SportsDataIO Projections</button>
 
+<button class="secondary" id="resetProjections">Reset manual projections</button>
 <button class="secondary" id="mock">Load Demo Players</button>
 </div>
 <p id="status" class="muted">Demo mode. Live salaries and projections are not yet connected.</p>
@@ -97,10 +98,47 @@ small,.muted{color:#aabbd0}
 </section>
 
 <section class="panel">
+<h2>Private Account Settings</h2>
+<div class="controls">
+<div><label for="accountEmail">Email</label><input id="accountEmail" type="email" autocomplete="username" inputmode="email"></div>
+<div><label for="accountPassword">Password</label><input id="accountPassword" type="password" autocomplete="current-password" minlength="8"></div>
+<button id="accountSignIn" disabled>Sign In</button>
+<button id="accountSignUp" class="secondary" disabled>Create Account</button>
+<button id="accountResetPassword" class="secondary" disabled>Forgot Password</button>
+<button id="accountUpdatePassword" class="secondary" hidden>Set New Password</button>
+<button id="accountSignOut" class="secondary" disabled>Sign Out</button>
+</div>
+<p id="accountStatus" class="muted" role="status" aria-live="polite">Checking private account storage…</p>
+<div class="controls" style="margin-bottom:12px">
+<div><label for="accountPresets">Your account presets</label><select id="accountPresets"><option value="">Sign in to load presets</option></select></div>
+<button id="accountSavePreset" disabled>Save to Account</button>
+<button id="accountLoadPreset" class="secondary" disabled>Load from Account</button>
+<button id="accountRefreshPresets" class="secondary" disabled>Refresh Account Presets</button>
+<button id="accountDeletePreset" class="secondary" disabled>Delete from Account</button>
+</div>
+<small>Sign in to the same optimizer account on your desktop and iPad to access the same saved presets. Save after changes, then load the preset on your other device. Refreshing this page or the preset list does not replace unsaved edits. This account is separate from your ChatGPT account.</small>
+<h3>Preset name</h3>
+<div class="controls">
+<div><label for="presetName">Preset name</label><input id="presetName" maxlength="80" value="My NFL Classic"></div>
+<button id="savePreset" class="secondary">Save Backup in This Browser</button>
+<div><label for="savedPresets">Saved presets</label><select id="savedPresets"><option value="">Select a preset</option></select></div>
+<button id="loadPreset" class="secondary">Load Preset</button>
+<button id="deletePreset" class="secondary">Delete Preset</button>
+<button id="sharePreset" class="secondary">Create Settings Link</button>
+<button id="exportPreset" class="secondary">Export Settings File</button>
+<div><label for="presetFile">Settings file (.json)</label><input id="presetFile" type="file" accept=".json,application/json"></div>
+<button id="importPreset" class="secondary">Import Settings File</button>
+</div>
+<div style="margin-top:12px"><label for="settingsLink">Settings link (copy to your other device)</label><input id="settingsLink" readonly style="width:100%" placeholder="Create a settings link to copy here"></div>
+<p id="presetStatus" class="muted" role="status" aria-live="polite">Choose a preset name above before saving to your account. Browser saves, links and files below are optional backups; only account saves are shared between signed-in devices.</p>
+<small>Presets include optimizer rules and manual player edits. Import the matching DK salary file to apply player-specific changes. Anyone with a settings link can read that snapshot; it contains no API credentials.</small>
+</section>
+
+<section class="panel">
 <h2>Player Pool</h2>
 <div class="tablewrap">
 <table>
-<thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Salary</th><th>Proj.</th><th>Min %</th><th>Max %</th><th>Used</th><th>Lock</th><th>Exclude</th></tr></thead>
+<thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Salary</th><th>Projection / Source</th><th>Min %</th><th>Max %</th><th>Used</th><th>Lock</th><th>Exclude</th></tr></thead>
 <tbody id="players"></tbody>
 </table>
 </div>
@@ -113,6 +151,8 @@ small,.muted{color:#aabbd0}
 </main>
 
 <script src="/classic.js"></script>
+<script src="/profiles.js"></script>
+<script src="/cloud-profiles.js"></script>
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
@@ -143,7 +183,7 @@ function makeDemo(){
    }
   }
  }
- return players;
+ return players.map(p=>({...p,baseProjection:p.proj,projectionSource:"Demo"}));
 }
 
 function render(){
@@ -159,7 +199,10 @@ function render(){
  $("players").innerHTML=visible.map(p=>`
  <tr>
  <td>${safe(p.name)}${p.status?` <small class="${p.excluded?"error":"muted"}">${safe(p.status)}</small>`:""}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td>
- <td>${money(p.salary)}</td><td>${p.proj.toFixed(1)}</td>
+ <td>${money(p.salary)}</td><td>
+ <input type="number" step="0.1" min="-1000" max="1000" style="width:90px" aria-label="Projection for ${safe(p.name)}" data-id="${p.id}" data-action="projection" value="${p.proj}">
+ <small>${p.projectionOverride!==undefined?"Manual":safe(p.projectionSource||"CSV average")}</small>
+ ${p.projectionOverride!==undefined?`<button class="secondary" type="button" data-id="${p.id}" data-action="resetProjection">Reset</button>`:""}</td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Minimum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="minExposure" value="${p.minExposure??""}" placeholder="0"></td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Maximum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="maxExposure" value="${p.maxExposure??""}" placeholder="Default"></td>
  <td>${lineups.length?`${((usage.get(p.id)||0)/lineups.length*100).toFixed(1)}% (${usage.get(p.id)||0}/${lineups.length})`:"—"}</td>
@@ -259,7 +302,13 @@ $("players").addEventListener("change",e=>{
  const input=e.target;
  const p=pool.find(x=>x.id===Number(input.dataset.id));
  if(!p)return;
- if(["minExposure","maxExposure"].includes(input.dataset.action)){
+ if(input.dataset.action==="projection"){
+  const value=Number(input.value);
+  if(!input.value.trim()||!Number.isFinite(value)||Math.abs(value)>1000){
+   $("status").textContent="Projection must be a number between -1000 and 1000. The previous value was kept.";render();return;
+  }
+  p.projectionOverride=value;p.proj=value;
+ }else if(["minExposure","maxExposure"].includes(input.dataset.action)){
   if(input.value.trim()==="")delete p[input.dataset.action];
   else p[input.dataset.action]=Number(input.value);
  }else if(input.dataset.action==="lock"){
@@ -269,6 +318,17 @@ $("players").addEventListener("change",e=>{
  }
  resetLineups();
  render();
+});
+$("players").addEventListener("click",e=>{
+ const input=e.target;
+ if(input.dataset.action!=="resetProjection")return;
+ const p=pool.find(p=>p.id===Number(input.dataset.id));if(!p)return;
+ delete p.projectionOverride;p.proj=p.baseProjection??p.csvAverage??0;
+ resetLineups("Manual projection removed. Generate new lineups.");
+});
+$("resetProjections").addEventListener("click",()=>{
+ for(const p of pool){delete p.projectionOverride;p.proj=p.baseProjection??p.csvAverage??0}
+ resetLineups("Manual projections reset to the latest loaded data. Generate new lineups.");
 });
 $("minUnique").addEventListener("input",()=>resetLineups("Minimum player difference changed. Generate new lineups."));
 for(const id of ["globalMaxExposure","stackCount","bringBack","avoidOpposingDST"]){
@@ -285,6 +345,91 @@ $("mock").addEventListener("click",()=>{
   render();
 });
  
+let pendingPreset=null,presetLoadVersion=0;
+function presetControls(){
+ return {num:Number($("num").value),...optimizerSettings(),season:Number($("season").value),week:Number($("week").value)};
+}
+function applyPresetControls(settings){
+ for(const [id,value] of Object.entries(settings)){
+  if(typeof value==="boolean")$(id).checked=value;else $(id).value=String(value);
+ }
+}
+function presetMessage(message){$("presetStatus").textContent=message}
+function refreshPresets(selected=""){
+ const list=Profiles.readSaved(localStorage);
+ $("savedPresets").innerHTML='<option value="">Select a preset</option>'+list.map(p=>`<option value="${safe(p.name)}">${safe(p.name)}</option>`).join("");
+ $("savedPresets").value=selected;
+}
+async function capturePreset(){
+ if(pendingPreset)throw Error("Import the matching salary CSV before saving or sharing pending player edits.");
+ // Capture a snapshot at click time, before asynchronous fingerprinting.
+ return Profiles.capture(pool.map(p=>({...p})),presetControls(),$("presetName").value.trim());
+}
+async function loadPreset(raw){
+ const version=++presetLoadVersion,target=pool,profile=Profiles.validate(raw);
+ const matching=await Profiles.matches(target,profile);
+ if(version!==presetLoadVersion||pool!==target)return;
+ if(matching)await Profiles.applyPlayers(target,profile);
+ if(version!==presetLoadVersion||pool!==target)return;
+ applyPresetControls(profile.settings);$("presetName").value=profile.name;
+ pendingPreset=matching?null:profile;
+ resetLineups("Settings loaded. Generate new lineups.");
+ presetMessage(matching?`Loaded “${profile.name}”. Save in this browser to keep it here.`:`Rules loaded from “${profile.name}”. Player edits are waiting for the matching DraftKings salaries CSV; current players were not changed.`);
+}
+async function applyPendingPreset(){
+ if(!pendingPreset)return;
+ await loadPreset(pendingPreset);
+}
+$("savePreset").addEventListener("click",async()=>{
+ try{const profile=await capturePreset();Profiles.save(localStorage,profile);refreshPresets(profile.name);presetMessage(`Saved “${profile.name}” in this browser. Create a link or export a file to transfer it to another device.`)}
+ catch(error){presetMessage("Save failed: "+error.message)}
+});
+$("loadPreset").addEventListener("click",async()=>{
+ try{
+  const profile=Profiles.readSaved(localStorage).find(p=>p.name===$("savedPresets").value);
+  if(!profile)throw Error("Select a saved preset first.");
+  await loadPreset(profile);
+ }catch(error){presetMessage("Load failed: "+error.message)}
+});
+$("deletePreset").addEventListener("click",()=>{
+ try{
+  const name=$("savedPresets").value;if(!name)throw Error("Select a preset first.");
+  Profiles.remove(localStorage,name);refreshPresets();presetMessage(`Deleted “${name}” from this browser.`);
+ }catch(error){presetMessage("Delete failed: "+error.message)}
+});
+$("sharePreset").addEventListener("click",async()=>{
+ try{
+  const profile=await capturePreset();
+  const link=location.origin+location.pathname+Profiles.encode(profile);
+  $("settingsLink").value=link;
+  try{await navigator.clipboard.writeText(link);presetMessage("Settings link copied. Open it on your other device, then import the matching salary CSV for player edits.")}
+  catch{ $("settingsLink").focus();$("settingsLink").select();presetMessage("Link created above. Copy it to your other device. It is a snapshot; create a new link after later edits.")}
+ }catch(error){presetMessage("Link failed: "+error.message)}
+});
+$("exportPreset").addEventListener("click",async()=>{
+ try{
+  const profile=await capturePreset(),url=URL.createObjectURL(new Blob([JSON.stringify(profile,null,2)],{type:"application/json"}));
+  const a=document.createElement("a");a.href=url;a.download="dfs-classic-settings.json";a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);presetMessage("Settings file exported. Import it on your other device and save a named preset there.");
+ }catch(error){presetMessage("Export failed: "+error.message)}
+});
+$("importPreset").addEventListener("click",async()=>{
+ try{
+  const file=$("presetFile").files[0];if(!file)throw Error("Select a settings JSON file first.");
+  if(file.size>300000)throw Error("Settings file is too large.");
+  await loadPreset(Profiles.parse(await file.text()));
+ }catch(error){presetMessage("Import failed: "+error.message)}
+});
+async function initializePresets(){
+ try{refreshPresets()}catch{presetMessage("Browser preset storage is unavailable. Settings links and files still work.")}
+ try{
+  if(typeof location!=="undefined"){
+   const incoming=Profiles.decode(location.hash);
+   if(incoming)await loadPreset(incoming);
+  }
+ }catch(error){presetMessage(error.message)}
+}
+
 function normalizePlayerName(name) {
   return String(name || "")
     .toLowerCase()
@@ -308,6 +453,7 @@ function normalizeTeam(team) {
   return aliases[code] || code;
 }
 
+let projectionRequestId=0;
 $("projections").addEventListener("click", async () => {
   const status = $("status");
 
@@ -320,6 +466,7 @@ $("projections").addEventListener("click", async () => {
 
   const season = $("season").value;
   const week = $("week").value;
+  const targetPool=pool,requestId=++projectionRequestId;
 
   status.textContent = "Loading SportsDataIO projections...";
 
@@ -329,6 +476,7 @@ $("projections").addEventListener("click", async () => {
     );
 
     const data = await response.json();
+    if(pool!==targetPool||requestId!==projectionRequestId||season!==$("season").value||week!==$("week").value)return;
 
     if (!response.ok) {
       throw Error(data.error || "Projection request failed");
@@ -351,6 +499,7 @@ $("projections").addEventListener("click", async () => {
         player.Position.toUpperCase()
       ].join("|");
 
+      if(player.FantasyPointsDraftKings===null||player.FantasyPointsDraftKings===undefined||String(player.FantasyPointsDraftKings).trim()==="")continue;
       const projectedPoints = Number(player.FantasyPointsDraftKings);
 
       if (Number.isFinite(projectedPoints) &&
@@ -369,12 +518,16 @@ $("projections").addEventListener("click", async () => {
       ].join("|");
 
       if (projectionMap.has(key)) {
-        player.proj = projectionMap.get(key);
+        player.baseProjection = projectionMap.get(key);
+        player.projectionSource="SportsDataIO";
         player.hasProjection = true;
         matched++;
       } else {
         player.hasProjection = false;
+        player.baseProjection=player.csvAverage??player.baseProjection??0;
+        player.projectionSource=player.source==="dk"?"CSV average":"Demo";
       }
+      player.proj=player.projectionOverride??player.baseProjection;
     }
 
     resetLineups("Projections updated. Generate new lineups.");
@@ -383,10 +536,12 @@ $("projections").addEventListener("click", async () => {
 
     status.textContent =
       `SportsDataIO: matched ${matched} of ${pool.length} players. ` +
-      `${pool.length - matched} players still use CSV averages. ` +
+      `${pool.length - matched} players have no SportsDataIO match. ` +
+      `${pool.filter(p=>p.projectionOverride!==undefined).length} manual overrides retained. ` +
       "Trial projections may be scrambled.";
 
   } catch (error) {
+    if(pool!==targetPool||requestId!==projectionRequestId)return;
     status.textContent =
       "Projection loading failed: " + error.message;
   }
@@ -457,6 +612,7 @@ $("importCSV").addEventListener("click", async () => {
 
     pool = imported;
     resetLineups("Players imported. Generate lineups.");
+    await applyPendingPreset();
     $("count").textContent = pool.length;
 
     $("csvStatus").textContent =
@@ -473,6 +629,8 @@ $("importCSV").addEventListener("click", async () => {
 });
  pool=makeDemo();
 render();
+const presetInitialization=initializePresets();
 </script>
+<script src="/cloud-ui.js"></script>
 </body>
 </html>

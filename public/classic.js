@@ -71,8 +71,11 @@ function importRows(rows){
  const players=rows.slice(1).map((row,i)=>{
   const get=k=>(row[cols[k]]||'').trim();
   const p={id:i+1,dkId:get('dkId'),name:get('name'),pos:get('pos').toUpperCase().replace(/^(D|DEF)$/,'DST'),team:get('team').toUpperCase(),salary:Number(get('salary').replace(/[$,]/g,'')),proj:Number(get('avg'))||0,source:'dk',locked:false,excluded:false};
+  p.csvAverage=Number.isFinite(p.proj)?p.proj:0;
+  p.baseProjection=p.csvAverage;p.proj=p.csvAverage;p.projectionSource='CSV average';
   p.status=get('status').toUpperCase();
   p.excluded=['OUT','IR','PUP','NFI','SUSP','SUSPENDED'].includes(p.status);
+  p.defaultExcluded=p.excluded;
   const game=get('game').toUpperCase().match(/^([A-Z]{2,3})@([A-Z]{2,3})\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{1,2}:\d{2}(?:AM|PM))\s+ET$/);
   const fail=message=>{throw Error(`Row ${i+2}: ${message}`)};
   if(!p.name||!/^\d+$/.test(p.dkId))fail('Missing name or invalid DraftKings player ID.');

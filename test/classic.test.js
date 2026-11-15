@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const Classic=require('../public/classic');
+const Profiles=require('../public/profiles');
 const headers=['Position','Name','ID','Roster Position','Salary','Game Info','TeamAbbrev','AvgPointsPerGame'];
 const positions=['QB','RB','RB','WR','WR','WR','TE','RB','DST'];
 const rows=()=>[[...headers],...positions.map((pos,i)=>[pos,`Player ${i}`,`${100000+i}`,['RB','WR','TE'].includes(pos)?`${pos}/FLEX`:pos,'5000',i%2?'BUF@NYJ 11/22/2099 01:00PM ET':'KC@DEN 11/22/2099 04:25PM ET',i%2?'BUF':'KC','12'])];
@@ -59,11 +60,17 @@ test('imports reject duplicate IDs, duplicate players, unsupported formats and m
  r=rows();r[0][2]='Other';assert.throws(()=>Classic.importRows(r),/Missing dkId/);
  r=rows();r.splice(2,1);assert.throws(()=>Classic.importRows(r),/lacks enough/);
 });
-function browser(){
+function browser(options={}){
  const elements=new Map();
  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',addEventListener(event,fn){this[event]=fn}});return elements.get(id)};
  get("minUnique").value="1";get("globalMaxExposure").value="100";get("stackCount").value="0";
- const context=vm.createContext({Classic,document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
+ const memory=new Map();
+ const localStorage=options.storage||{getItem:key=>memory.get(key)??null,setItem:(key,value)=>memory.set(key,value)};
+ for(const [id,value] of Object.entries(Profiles.controlDefaults)){
+  if(typeof value==='boolean')get(id).checked=value;else get(id).value=String(value);
+ }
+ get('minUnique').value='1';get('presetName').value='My NFL Classic';
+ const context=vm.createContext({Classic,Profiles,localStorage,location:options.location||{origin:'https://dfs.example',pathname:'/',hash:''},navigator:{clipboard:{writeText:async value=>{get('clipboard').value=value}}},document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
   terminate(){this.stopped=true}
   postMessage({pool,count,...settings}){queueMicrotask(()=>{
    if(this.stopped)return;
@@ -73,7 +80,7 @@ function browser(){
  }});
  const html=fs.readFileSync('public/index.html','utf8');
  vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
- return {context,get,run:s=>vm.runInContext(s,context)};
+ return {context,get,storage:localStorage,ready:vm.runInContext('presetInitialization',context),run:s=>vm.runInContext(s,context)};
 }
 test('browser CSV parser handles BOM, CRLF, embedded commas, quotes and newlines',()=>{
  const b=browser();
@@ -320,4 +327,42 @@ test('stack rules reject same-team players from the wrong game and non-WR/TE tea
  assert.match(Classic.validatePortfolio([l],p,{stackCount:1}).join(' '),/WR\/TE teammate/);
  for(const p of l){p.game=qb.game;if(['RB','WR','TE'].includes(p.pos))p.team=qb.team}
  assert.match(Classic.validatePortfolio([l],p,{bringBack:true}).join(' '),/bring-back/);
+});
+test('manual projections persist through SportsDataIO refresh and reset to its latest values',async()=>{
+ const b=browser();b.context.fixture=pool();b.run('pool=fixture');
+ b.get('players').change({target:{dataset:{id:'1',action:'projection'},value:'31.5'}});
+ assert.equal(b.run('pool[0].proj'),31.5);assert.equal(b.run('pool[0].projectionOverride'),31.5);
+ assert.match(b.get('players').innerHTML,/>Manual<\/small>/);
+ b.context.fetch=async()=>({ok:true,json:async()=>[{Name:'Player 0',Team:'KC',Position:'QB',FantasyPointsDraftKings:24}]});
+ await b.get('projections').click();
+ assert.equal(b.run('pool[0].proj'),31.5);assert.equal(b.run('pool[0].baseProjection'),24);
+ b.get('players').click({target:{dataset:{id:'1',action:'resetProjection'}}});
+ assert.equal(b.run('pool[0].proj'),24);assert.equal(b.run('pool[0].projectionOverride'),undefined);
+ b.get('players').change({target:{dataset:{id:'1',action:'projection'},value:''}});
+ assert.equal(b.run('pool[0].proj'),24);assert.match(b.get('status').textContent,/previous value was kept/);
+});
+test('outdated projection requests cannot modify a newly imported pool',async()=>{
+ const b=browser();b.context.fixture=pool();b.run('pool=fixture');
+ let respond;b.context.fetch=()=>new Promise(resolve=>{respond=resolve});
+ const pending=b.get('projections').click();
+ b.run('pool=pool.map(p=>({...p,name:"New "+p.name}))');
+ respond({ok:true,json:async()=>[{Name:'New Player 0',Team:'KC',Position:'QB',FantasyPointsDraftKings:90}]});
+ await pending;assert.equal(b.run('pool[0].proj'),12);
+});
+test('desktop saved settings link applies on another browser after the matching CSV is imported',async()=>{
+ const desktop=browser();await desktop.ready;desktop.context.fixture=pool();desktop.run('pool=fixture');
+ desktop.get('players').change({target:{dataset:{id:'1',action:'projection'},value:'30'}});
+ desktop.get('globalMaxExposure').value='60';desktop.get('presetName').value='My mobile rules';
+ await desktop.get('sharePreset').click();
+ const link=desktop.get('clipboard').value;assert.match(link,/#settings=/);
+ const ipad=browser({location:{origin:'https://dfs.example',pathname:'/',hash:link.slice(link.indexOf('#'))}});
+ await ipad.ready;assert.equal(ipad.get('globalMaxExposure').value,'60');
+ assert.match(ipad.get('presetStatus').textContent,/waiting for the matching/);
+ ipad.get('csvFile').files=[{name:'DKSalaries.csv',text:async()=>rows().map(r=>r.join(',')).join('\r\n')}];
+ await ipad.get('importCSV').click();assert.equal(ipad.run('pool[0].proj'),30);
+ await ipad.get('savePreset').click();assert.match(ipad.get('presetStatus').textContent,/Saved/);
+ const reopened=browser({storage:ipad.storage});await reopened.ready;
+ reopened.context.fixture=pool();reopened.run('pool=fixture');
+ reopened.get('savedPresets').value='My mobile rules';await reopened.get('loadPreset').click();
+ assert.equal(reopened.run('pool[0].proj'),30);assert.equal(reopened.get('globalMaxExposure').value,'60');
 });
