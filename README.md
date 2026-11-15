@@ -48,3 +48,7 @@ Choose **Classic** with Main, Early, Late or a custom game slate, or choose **Sh
 Showdown uses 1 Captain and 5 FLEX players, a $50,000 cap, both teams and unique people across roles. Captain salary is read from its own CSV row and validated as 1.5× FLEX salary; projected Captain points are 1.5× base points. Captain and FLEX use separate imported DK IDs. Exposures and minimum player differences count people across roles. Existing Classic presets default to Classic, while new presets also save the format and slate category.
 
 See [slate and format details](docs/slate-formats.md) for importing, validation and CSV export behavior.
+
+## Projection imports and lineup review
+
+Expand **Import your own projections (CSV)** to download a template and upload DK-ID or Name/Team projections. Imports preserve zero/negative values, can retain hand edits, handle Captain multipliers and save with account presets. The Lineup Review dashboard adds salary/remaining-budget summaries, exposures, QB stack details, an inspector, and side-by-side comparison. Read [projection import and review details](docs/projections-and-review.md) for supported columns, matching rules and limitations.

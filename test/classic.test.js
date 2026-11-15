@@ -5,6 +5,8 @@ const vm=require('node:vm');
 const Classic=require('../public/classic');
 const Profiles=require('../public/profiles');
 const Slates=require('../public/slates');
+const ProjectionCSV=require('../public/projection-csv');
+const LineupReview=require('../public/lineup-review');
 const headers=['Position','Name','ID','Roster Position','Salary','Game Info','TeamAbbrev','AvgPointsPerGame'];
 const positions=['QB','RB','RB','WR','WR','WR','TE','RB','DST'];
 const rows=()=>[[...headers],...positions.map((pos,i)=>[pos,`Player ${i}`,`${100000+i}`,['RB','WR','TE'].includes(pos)?`${pos}/FLEX`:pos,'5000',i%2?'BUF@NYJ 11/22/2099 01:00PM ET':'KC@DEN 11/22/2099 04:25PM ET',i%2?'BUF':'KC','12'])];
@@ -71,7 +73,7 @@ function browser(options={}){
   if(typeof value==='boolean')get(id).checked=value;else get(id).value=String(value);
  }
  get('minUnique').value='1';get('presetName').value='My NFL Classic';
- const context=vm.createContext({Classic,Profiles,Slates,localStorage,location:options.location||{origin:'https://dfs.example',pathname:'/',hash:''},navigator:{clipboard:{writeText:async value=>{get('clipboard').value=value}}},document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
+ const context=vm.createContext({Classic,Profiles,Slates,ProjectionCSV,LineupReview,localStorage,location:options.location||{origin:'https://dfs.example',pathname:'/',hash:''},navigator:{clipboard:{writeText:async value=>{get('clipboard').value=value}}},document:{getElementById:get},console,Math,Number,Set,Map,Blob,URL,setTimeout,alert:()=>{},Worker:class{
   terminate(){this.stopped=true}
   postMessage({pool,count,...settings}){queueMicrotask(()=>{
    if(this.stopped)return;
@@ -421,4 +423,40 @@ test('an in-flight CSV import cannot overwrite a newly selected provider slate',
  b.get('providerSlate').value='different';b.get('providerSlate').change();
  finish(rows().map(r=>r.join(',')).join('\r\n'));await pending;
  assert.equal(b.run('pool.length'),0);assert.match(b.get('csvStatus').textContent,/Slate selection changed/);
+});
+test('projection CSV UI preserves hand edits, reports unmatched rows and rejects stale reads',async()=>{
+ const b=browser();await b.ready;b.context.fixture=pool();b.run('pool=fixture');
+ b.get('players').change({target:{dataset:{id:'1',action:'projection'},value:'29'}});
+ b.get('projectionMatch').value='auto';b.get('projectionValues').value='base';b.get('keepManualProjections').checked=true;
+ b.get('projectionFile').files=[{name:'Forecast.csv',text:async()=>`ID,Projection\n100000,20\n100001,0\n999999,30`}];
+ await b.get('importProjectionCSV').click();assert.equal(b.run('pool[0].proj'),29);assert.equal(b.run('pool[1].proj'),0);
+ assert.match(b.get('projectionCSVStatus').textContent,/1 players updated; 1 hand edits kept; 1 unmatched rows/);
+ let finish;b.get('projectionFile').files=[{name:'Old.csv',text:()=>new Promise(resolve=>{finish=resolve})}];
+ const pending=b.get('importProjectionCSV').click();b.get('mock').click();finish('ID,Projection\n100000,90');await pending;
+ assert.match(b.get('projectionCSVStatus').textContent,/changed while reading/);
+});
+test('review dashboard inspects and compares lineups, filters exposures and clears stale results',async()=>{
+ const b=browser();await b.ready;b.context.fixture=diversePool();b.get('num').value='10';b.get('minUnique').value='2';
+ await b.run('pool=fixture;generate()');assert.equal(b.run('lineups.length'),10);
+ assert.match(b.get('reviewValidation').textContent,/All 10 lineups pass/);
+ assert.match(b.get('reviewSummary').innerHTML,/Average salary/);assert.match(b.get('reviewExposure').innerHTML,/100|Lineups/);
+ b.get('reviewLineups').click({target:{dataset:{reviewIndex:'2'}}});assert.match(b.get('reviewDetails').innerHTML,/Lineup 3 details/);
+ b.get('reviewA').value='0';b.get('reviewB').value='1';b.get('reviewB').change();assert.match(b.get('reviewCompare').innerHTML,/players different/);
+ b.get('reviewPlayerSearch').value='not-in-pool';b.get('reviewPlayerSearch').input();assert.ok(!b.get('reviewExposure').innerHTML.includes('<tr><td>Choice'));
+ b.get('mock').click();assert.equal(b.get('reviewSummary').innerHTML,'');assert.equal(b.get('reviewInspect').disabled,true);
+});
+test('a projection import that preserves all hand edits leaves the generated set available',async()=>{
+ const b=browser();await b.ready;b.context.fixture=pool();b.run('pool=fixture');
+ b.get('players').change({target:{dataset:{id:'1',action:'projection'},value:'25'}});
+ b.get('num').value='1';await b.run('generate()');assert.equal(b.run('lineups.length'),1);
+ b.get('keepManualProjections').checked=true;b.get('projectionFile').files=[{name:'Kept.csv',text:async()=>`ID,Projection\n100000,20`}];
+ await b.get('importProjectionCSV').click();assert.equal(b.run('lineups.length'),1);assert.equal(b.run('pool[0].proj'),25);
+ assert.match(b.get('projectionCSVStatus').textContent,/0 players updated; 1 hand edits kept/);
+});
+test('review output escapes player names from uploaded files',async()=>{
+ const b=browser();await b.ready;b.context.fixture=pool();b.run('pool=fixture;pool[0].name="<img src=x onerror=alert(1)>"');
+ b.get('num').value='1';await b.run('generate()');
+ assert.ok(b.get('reviewDetails').innerHTML.includes('&lt;img'));
+ assert.ok(!b.get('reviewDetails').innerHTML.includes('<img'));
+ assert.ok(!b.get('reviewExposure').innerHTML.includes('<img'));
 });

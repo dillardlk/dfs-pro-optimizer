@@ -30,6 +30,7 @@ th{color:#93bdf7}
 small,.muted{color:#aabbd0}
 .error{color:#ff9898}
 .good{color:#79e3ae}
+.compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px}
 .lineup{border:1px solid #3c536f;border-radius:9px;padding:14px;margin:12px 0}
 </style>
 </head>
@@ -67,9 +68,22 @@ small,.muted{color:#aabbd0}
   
 <button id="projections">Load SportsDataIO Projections</button>
 
-<button class="secondary" id="resetProjections">Reset manual projections</button>
+<button class="secondary" id="resetProjections">Reset projection overrides</button>
 <button class="secondary" id="mock">Load Demo Players</button>
 </div>
+<details style="margin-top:18px">
+<summary>Import your own projections (CSV)</summary>
+<div class="controls" style="margin-top:12px">
+<div><label for="projectionFile">Projection CSV</label><input id="projectionFile" type="file" accept=".csv,text/csv"></div>
+<div><label for="projectionMatch">Match players using</label><select id="projectionMatch"><option value="auto">DK ID preferred; otherwise Name + Team</option><option value="name">Name + Team (ignore other provider IDs)</option></select></div>
+<div><label for="projectionValues">Projection values</label><select id="projectionValues"><option value="base">Base player points</option><option value="slot">Slot-adjusted (Captain already ×1.5)</option></select></div>
+<div><label><input id="keepManualProjections" type="checkbox" checked> Keep hand-edited projections</label></div>
+<button id="importProjectionCSV">Import Projections</button>
+<button id="projectionTemplate" class="secondary">Download Projection Template</button>
+</div>
+<p id="projectionCSVStatus" class="muted" role="status">Import salaries first. Use DK ID + Projection, or Name + Team + Projection. Values must be for the active slate; name matching cannot verify the week.</p>
+<small>Zero and negative projections are allowed. Imports replace prior CSV imports, preserve hand edits when checked, and never add players or change salaries. Base points automatically become ×1.5 at Captain. To import slot-adjusted Showdown values, include a role-specific DK ID or Roster Position.</small>
+</details>
 <p id="status" class="muted">Demo mode. Live salaries and projections are not yet connected.</p>
 </section>
 
@@ -138,7 +152,7 @@ small,.muted{color:#aabbd0}
 </div>
 <div style="margin-top:12px"><label for="settingsLink">Settings link (copy to your other device)</label><input id="settingsLink" readonly style="width:100%" placeholder="Create a settings link to copy here"></div>
 <p id="presetStatus" class="muted" role="status" aria-live="polite">Choose a preset name above before saving to your account. Browser saves, links and files below are optional backups; only account saves are shared between signed-in devices.</p>
-<small>Presets include optimizer rules and manual player edits. Import the matching DK salary file to apply player-specific changes. Anyone with a settings link can read that snapshot; it contains no API credentials.</small>
+<small>Presets include optimizer rules and projection/exposure edits, including imported projections. Import the matching DK salary file to apply player-specific changes. Anyone with a settings link can read that snapshot; it contains no API credentials.</small>
 </section>
 
 <section class="panel">
@@ -152,6 +166,26 @@ small,.muted{color:#aabbd0}
 </section>
 
 <section class="panel">
+<h2>Lineup Review</h2>
+<p id="reviewValidation" class="muted" role="status">Generate lineups to review salary usage, exposure, stacks and player differences.</p>
+<div id="reviewSummary" class="stats"></div>
+<div class="controls" style="margin-top:15px">
+<div><label for="reviewSort">Sort lineup overview</label><select id="reviewSort"><option value="points">Projected points</option><option value="salary">Salary used</option><option value="remaining">Salary remaining</option></select></div>
+<div><label for="reviewInspect">Inspect lineup</label><select id="reviewInspect" disabled></select></div>
+</div>
+<div id="reviewDetails"></div>
+<details open><summary>All lineup totals</summary><div class="tablewrap" id="reviewLineups" style="margin-top:12px"></div></details>
+<h3>Player Exposure</h3>
+<div><label for="reviewPlayerSearch">Search players or teams in this generated set</label><input id="reviewPlayerSearch" placeholder="Search exposure"></div>
+<div class="tablewrap" id="reviewExposure"></div>
+<small>Exposure counts people across Captain and FLEX. Team exposure below counts a lineup once per team, even when it stacks multiple teammates.</small>
+<details style="margin-top:12px"><summary>Team exposure</summary><div class="tablewrap" id="reviewTeams"></div></details>
+<h3>Compare Lineups</h3>
+<div class="controls"><div><label for="reviewA">First lineup</label><select id="reviewA" disabled></select></div><div><label for="reviewB">Second lineup</label><select id="reviewB" disabled></select></div></div>
+<div id="reviewCompare" class="muted">Generate at least two lineups to compare.</div>
+</section>
+
+<section class="panel">
 <h2>Generated Lineups</h2>
 <div id="results" class="muted">Generate lineups to see results.</div>
 </section>
@@ -160,6 +194,8 @@ small,.muted{color:#aabbd0}
 <script src="/classic.js"></script>
 <script src="/profiles.js"></script>
 <script src="/slates.js"></script>
+<script src="/projection-csv.js"></script>
+<script src="/lineup-review.js"></script>
 <script src="/cloud-profiles.js"></script>
 <script>
 "use strict";
@@ -241,7 +277,7 @@ function render(){
  <td>${safe(p.name)}${p.status?` <small class="${p.excluded?"error":"muted"}">${safe(p.status)}</small>`:""}</td><td>${safe(p.rosterSlot?p.rosterSlot+" · "+p.pos:p.pos)}</td><td>${safe(p.team)}</td>
  <td>${money(p.salary)}</td><td>
  <input type="number" step="0.1" min="${-1000*(p.projectionMultiplier||1)}" max="${1000*(p.projectionMultiplier||1)}" style="width:90px" aria-label="Projection for ${safe(p.name)}" data-id="${p.id}" data-action="projection" value="${p.proj}">
- <small>${p.projectionOverride!==undefined?"Manual":safe(p.projectionSource||"CSV average")}</small>
+ <small>${p.projectionOverride!==undefined?safe(p.projectionOverrideSource||"Manual"):safe(p.projectionSource||"CSV average")}</small>
  ${p.projectionOverride!==undefined?`<button class="secondary" type="button" data-id="${p.id}" data-action="resetProjection">Reset</button>`:""}</td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Minimum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="minExposure" value="${p.minExposure??""}" placeholder="0"></td>
  <td><input type="number" min="0" max="100" step="1" style="width:75px" aria-label="Maximum exposure for ${safe(p.name)}" data-id="${p.id}" data-action="maxExposure" value="${p.maxExposure??""}" placeholder="Default"></td>
@@ -249,7 +285,78 @@ function render(){
  <td><input type="checkbox" data-id="${p.id}" data-action="lock" ${p.locked?"checked":""}></td>
  <td><input type="checkbox" data-id="${p.id}" data-action="exclude" ${p.excluded?"checked":""}></td>
  </tr>`).join("");
+ renderReview();
 }
+
+function reviewRoster(lineup,engine){
+ const ordered=engine.order(lineup)||lineup;
+ return `<div class="tablewrap"><table><thead><tr><th>Slot</th><th>Player</th><th>Team</th><th>Salary</th><th>Projection</th></tr></thead><tbody>${ordered.map((p,i)=>`<tr><td>${safe(engine.slots[i]||p.rosterSlot||p.pos)}</td><td>${safe(p.name)}</td><td>${safe(p.team)}</td><td>${money(p.salary)}</td><td>${p.proj.toFixed(1)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function renderReview(){
+ const engine=currentEngine(),count=lineups.length;
+ for(const id of ["reviewInspect","reviewA","reviewB"]){
+  const old=$(id).value;
+  $(id).innerHTML=count?lineups.map((l,i)=>`<option value="${i}">Lineup ${i+1}</option>`).join(""):"";
+  const fallback=id==="reviewB"&&count>1?1:0;
+  $(id).value=old!==""&&Number(old)>=0&&Number(old)<count?old:String(fallback);
+  $(id).disabled=id==="reviewInspect"?!count:count<2;
+ }
+ if(!count){
+  $("reviewValidation").className="muted";$("reviewValidation").textContent="Generate lineups to review salary usage, exposure, stacks and player differences.";
+  for(const id of ["reviewSummary","reviewLineups","reviewDetails","reviewExposure","reviewTeams"])$(id).innerHTML="";
+  $("reviewCompare").textContent="Generate at least two lineups to compare.";return;
+ }
+ const report=LineupReview.analyze(lineups,pool,engine,optimizerSettings());
+ const errors=engine.validatePortfolio(lineups,pool,optimizerSettings());
+ $("reviewValidation").className=errors.length?"error":"good";
+ $("reviewValidation").textContent=errors.length?"Current checks: "+errors.join(" "):`All ${count} lineups pass roster, slate, salary, exposure, stacking and player-difference checks.`;
+ const cards=[["Average salary",money(Math.round(report.salaryAverage))],["Average remaining",money(Math.round(report.remainingAverage))],["Projected points",`${report.pointsMin.toFixed(1)}–${report.pointsMax.toFixed(1)}`],["Minimum players different",report.minimumDifference??"One lineup"],["Average shared players",report.averageOverlap===null?"One lineup":report.averageOverlap.toFixed(1)],["Lineups with QB + WR/TE",`${report.stackedLineups}/${count}`],["Lineups with bring-back",`${report.bringBackLineups}/${count}`]];
+ $("reviewSummary").innerHTML=cards.map(([label,value])=>`<div class="stat"><small>${label}</small><strong>${safe(value)}</strong></div>`).join("");
+ const sort=$("reviewSort").value;
+ const sorted=[...report.lineups].sort((a,b)=>sort==="salary"?b.salary-a.salary:sort==="remaining"?b.remaining-a.remaining:b.points-a.points);
+ $("reviewLineups").innerHTML=`<table><thead><tr><th>Lineup</th><th>Salary</th><th>Remaining</th><th>Projected</th><th>QB stacks</th><th>Review</th></tr></thead><tbody>${sorted.map(r=>`<tr><td>${r.index+1}</td><td>${money(r.salary)}</td><td>${money(r.remaining)}</td><td>${r.points.toFixed(1)}</td><td>${r.stacks.length?r.stacks.map(s=>safe(s.qb.name)+": "+s.teammates.length+" WR/TE").join("; "):"No QB"}</td><td><button class="secondary" data-review-index="${r.index}">Inspect</button></td></tr>`).join("")}</tbody></table>`;
+ const inspect=Number($("reviewInspect").value),row=report.lineups[inspect];
+ const stackDetails=row.stacks.map(s=>`<p><strong>${safe(s.qb.name)}</strong>: WR/TE teammates ${s.teammates.length?s.teammates.map(p=>safe(p.name)).join(", "):"none"}; opposing RB/WR/TE ${s.opponents.length?s.opponents.map(p=>safe(p.name)).join(", "):"none"}.${s.opposingDST?' <span class="error">Opposing DST selected.</span>':""}</p>`).join("");
+ $("reviewDetails").innerHTML=`<h3>Lineup ${inspect+1} details</h3><p>${money(row.salary)} used · ${money(row.remaining)} remaining · ${row.points.toFixed(1)} projected points</p>${reviewRoster(lineups[inspect],engine)}${stackDetails||'<p class="muted">No QB selected in this lineup.</p>'}`;
+ const search=$("reviewPlayerSearch").value.trim().toLowerCase();
+ const exposures=report.exposures.filter(p=>!search||(p.name+" "+p.team).toLowerCase().includes(search));
+ $("reviewExposure").innerHTML=`<table><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Lineups</th><th>Exposure</th><th>Min / Max</th>${engine.format==="showdown"?"<th>Captain</th><th>FLEX</th>":""}</tr></thead><tbody>${exposures.map(p=>`<tr><td>${safe(p.name)}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td><td>${p.count}/${count}</td><td>${p.percentage.toFixed(1)}%</td><td>${p.min}% / ${p.max}%</td>${engine.format==="showdown"?`<td>${p.captain}</td><td>${p.flex}</td>`:""}</tr>`).join("")}</tbody></table>`;
+ $("reviewTeams").innerHTML=`<table><thead><tr><th>Team</th><th>Lineups with team</th><th>Exposure</th></tr></thead><tbody>${report.teams.map(t=>`<tr><td>${safe(t.team)}</td><td>${t.count}/${count}</td><td>${t.percentage.toFixed(1)}%</td></tr>`).join("")}</tbody></table>`;
+ if(count<2){$("reviewCompare").textContent="Generate at least two lineups to compare.";return}
+ const a=Number($("reviewA").value),b=Number($("reviewB").value);
+ if(a===b){$("reviewCompare").textContent="Choose two different lineups.";return}
+ const comparison=LineupReview.compare(lineups[a],lineups[b],engine),first=report.lineups[a],second=report.lineups[b];
+ const names=players=>players.length?players.map(p=>safe(p.name)).join(", "):"None";
+ $("reviewCompare").innerHTML=`<p><strong>${comparison.onlyA.length} players different</strong> · ${comparison.shared.length} shared.</p><p>Shared: ${names(comparison.shared)}</p><p>Only Lineup ${a+1}: ${names(comparison.onlyA)}</p><p>Only Lineup ${b+1}: ${names(comparison.onlyB)}</p>${engine.format==="showdown"?`<p>Captains: Lineup ${a+1} — ${safe(comparison.captainA?.name||"None")}; Lineup ${b+1} — ${safe(comparison.captainB?.name||"None")}. Changing Captain alone does not count as changing a person.</p>`:""}<div class="compare-grid"><div><h4>Lineup ${a+1}</h4><p>${money(first.salary)} used · ${money(first.remaining)} remaining · ${first.points.toFixed(1)} projected</p>${reviewRoster(lineups[a],engine)}</div><div><h4>Lineup ${b+1}</h4><p>${money(second.salary)} used · ${money(second.remaining)} remaining · ${second.points.toFixed(1)} projected</p>${reviewRoster(lineups[b],engine)}</div></div>`;
+}
+for(const id of ["reviewSort","reviewInspect","reviewA","reviewB"])$(id).addEventListener("change",renderReview);
+$("reviewPlayerSearch").addEventListener("input",renderReview);
+$("reviewLineups").addEventListener("click",e=>{
+ const value=e.target.dataset.reviewIndex;
+ if(value===undefined||!Number.isInteger(Number(value))||Number(value)<0||Number(value)>=lineups.length)return;
+ $("reviewInspect").value=value;renderReview();$("reviewDetails").scrollIntoView?.({behavior:"smooth",block:"start"});
+});
+$("importProjectionCSV").addEventListener("click",async()=>{
+ const file=$("projectionFile").files[0];
+ if(!file){$("projectionCSVStatus").textContent="Select a projection CSV file first.";return}
+ if(file.size>2000000){$("projectionCSVStatus").textContent="Projection CSV is too large (maximum 2 MB).";return}
+ const target=pool,version=generationVersion,engine=currentEngine();
+ const options={matchBy:$("projectionMatch").value||"auto",slotAdjusted:$("projectionValues").value==="slot",keepManual:$("keepManualProjections").checked};
+ try{
+  const rows=parseCSV(await file.text());
+  if(target!==pool||version!==generationVersion)throw Error("Player data or settings changed while reading the file. Import it again.");
+  const result=ProjectionCSV.plan(rows,pool,engine,options);
+  if(result.changedPlayers){ProjectionCSV.apply(result);resetLineups("CSV projections applied. Generate new lineups.")}
+  $("projectionCSVStatus").textContent=`${file.name}: ${result.changedPlayers} players updated; ${result.preservedPlayers} hand edits kept; ${result.unmatchedRows} unmatched rows; ${result.duplicateRows} agreeing duplicate rows combined. Matched ${result.matchedPlayers} people. Salaries and eligibility were unchanged.`;
+ }catch(error){$("projectionCSVStatus").textContent="Projection import failed: "+error.message}
+});
+$("projectionTemplate").addEventListener("click",()=>{
+ try{
+  const csv=ProjectionCSV.template(pool,currentEngine()),url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  const a=document.createElement("a");a.href=url;a.download="dfs-projection-template.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  $("projectionCSVStatus").textContent="Template downloaded. Edit Projection values as base points, then import it with Base player points selected.";
+ }catch(error){$("projectionCSVStatus").textContent="Template failed: "+error.message}
+});
 
 function optimizerSettings(){
  return {...contestContext,minUnique:Number($("minUnique").value),globalMaxExposure:Number($("globalMaxExposure").value),stackCount:Number($("stackCount").value),bringBack:$("bringBack").checked,avoidOpposingDST:$("avoidOpposingDST").checked};
@@ -348,7 +455,7 @@ $("players").addEventListener("change",e=>{
   if(!input.value.trim()||!Number.isFinite(value)||Math.abs(value)>1000*(p.projectionMultiplier||1)){
    $("status").textContent=`Projection must be a number between ${-1000*(p.projectionMultiplier||1)} and ${1000*(p.projectionMultiplier||1)}. The previous value was kept.`;render();return;
   }
-  for(const other of related){const adjusted=value/(p.projectionMultiplier||1)*(other.projectionMultiplier||1);other.projectionOverride=adjusted;other.proj=adjusted}
+  for(const other of related){const adjusted=value/(p.projectionMultiplier||1)*(other.projectionMultiplier||1);other.projectionOverride=adjusted;other.proj=adjusted;other.projectionOverrideSource="Manual"}
  }else if(["minExposure","maxExposure"].includes(input.dataset.action)){
   for(const other of related){if(input.value.trim()==="")delete other[input.dataset.action];else other[input.dataset.action]=Number(input.value)}
  }else if(input.dataset.action==="lock"){
@@ -364,12 +471,12 @@ $("players").addEventListener("click",e=>{
  const input=e.target;
  if(input.dataset.action!=="resetProjection")return;
  const p=pool.find(p=>p.id===Number(input.dataset.id));if(!p)return;
- for(const other of pool.filter(other=>currentEngine().identity(other)===currentEngine().identity(p))){delete other.projectionOverride;other.proj=other.baseProjection??other.csvAverage??0}
- resetLineups("Manual projection removed. Generate new lineups.");
+ for(const other of pool.filter(other=>currentEngine().identity(other)===currentEngine().identity(p))){delete other.projectionOverride;delete other.projectionOverrideSource;other.proj=other.baseProjection??other.csvAverage??0}
+ resetLineups("Projection override removed. Generate new lineups.");
 });
 $("resetProjections").addEventListener("click",()=>{
- for(const p of pool){delete p.projectionOverride;p.proj=p.baseProjection??p.csvAverage??0}
- resetLineups("Manual projections reset to the latest loaded data. Generate new lineups.");
+ for(const p of pool){delete p.projectionOverride;delete p.projectionOverrideSource;p.proj=p.baseProjection??p.csvAverage??0}
+ resetLineups("Projection edits and CSV overrides reset to the latest loaded data. Generate new lineups.");
 });
 $("contestFormat").addEventListener("change",()=>setContestContext($("contestFormat").value,$("slateType").value));
 $("slateType").addEventListener("change",()=>setContestContext($("contestFormat").value,$("slateType").value));
@@ -584,7 +691,7 @@ $("projections").addEventListener("click", async () => {
     status.textContent =
       `SportsDataIO: matched ${matched} of ${pool.length} players. ` +
       `${pool.length - matched} players have no SportsDataIO match. ` +
-      `${pool.filter(p=>p.projectionOverride!==undefined).length} manual overrides retained. ` +
+      `${pool.filter(p=>p.projectionOverride!==undefined).length} user projection overrides retained. ` +
       "Trial projections may be scrambled.";
 
   } catch (error) {

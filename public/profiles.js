@@ -25,7 +25,10 @@ function validate(raw){
   if(!p||typeof p.dkId!=='string'||!/^\d{1,30}$/.test(p.dkId)||seen.has(p.dkId))throw Error('Invalid or duplicate player override ID.');
   seen.add(p.dkId);
   const result={dkId:p.dkId};
-  if(p.projection!==undefined)result.projection=checkNumber(p.projection,-1000,1000,'Projection',false);
+  if(p.projection!==undefined){result.projection=checkNumber(p.projection,-1000,1000,'Projection',false);
+   if(p.projectionSource!==undefined&&!['Manual','Projection CSV'].includes(p.projectionSource))throw Error('Invalid projection override source.');
+   result.projectionSource=p.projectionSource||'Manual';
+  }
   for(const key of ['minExposure','maxExposure'])if(p[key]!==undefined)result[key]=checkNumber(p[key],0,100,key);
   for(const key of ['locked','excluded'])if(p[key]!==undefined){
    if(typeof p[key]!=='boolean')throw Error(`Invalid ${key} override.`);
@@ -47,7 +50,7 @@ async function capture(pool,settings,name){
  const slate=await fingerprint(pool);
  const players=slate?pool.flatMap(p=>{
   const row={dkId:p.dkId};
-  if(p.projectionOverride!==undefined)row.projection=p.projectionOverride/(p.projectionMultiplier||1);
+  if(p.projectionOverride!==undefined){row.projection=p.projectionOverride/(p.projectionMultiplier||1);row.projectionSource=p.projectionOverrideSource||'Manual'}
   if(p.minExposure!==undefined)row.minExposure=p.minExposure;
   if(p.maxExposure!==undefined)row.maxExposure=p.maxExposure;
   if(p.locked)row.locked=true;
@@ -66,14 +69,14 @@ async function applyPlayers(pool,raw){
  const byId=new Map(pool.map(p=>[p.dkId,p]));
  if(profile.players.some(p=>!byId.has(p.dkId)))throw Error('Saved player IDs are not present in this slate.');
  for(const p of pool){
-  delete p.minExposure;delete p.maxExposure;delete p.projectionOverride;
+  delete p.minExposure;delete p.maxExposure;delete p.projectionOverride;delete p.projectionOverrideSource;
   p.locked=false;p.excluded=Boolean(p.defaultExcluded);
   p.proj=p.baseProjection??p.csvAverage??p.proj;
  }
  for(const row of profile.players){
   const p=byId.get(row.dkId);
   for(const key of ['minExposure','maxExposure','locked','excluded'])if(row[key]!==undefined)p[key]=row[key];
-  if(row.projection!==undefined){p.projectionOverride=row.projection*(p.projectionMultiplier||1);p.proj=p.projectionOverride}
+  if(row.projection!==undefined){p.projectionOverride=row.projection*(p.projectionMultiplier||1);p.proj=p.projectionOverride;p.projectionOverrideSource=row.projectionSource||'Manual'}
   if(p.locked)p.excluded=false;
  }
  return profile.players.length;
