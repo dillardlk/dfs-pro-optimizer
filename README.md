@@ -1,0 +1,25 @@
+# DFS Pro Optimizer
+
+DraftKings NFL Classic lineup builder using Node.js, Express and browser JavaScript. The existing Render start command remains `npm start`. Configure `SPORTSDATAIO_API_KEY` only in the server environment; never put it in browser code or commit it.
+
+## Local use
+
+Install dependencies with `npm install`, then run `npm start` (default port 3000, or use `PORT`). Run validation and browser-handler regression tests with `npm test`.
+
+1. Download the DraftKings **NFL Classic** salaries CSV for the exact contest slate and import it. The standard Position, Name, ID, Roster Position, Salary, Game Info and TeamAbbrev columns are required. AvgPointsPerGame remains an optional fallback.
+2. Optionally load SportsDataIO projections for the matching season/week. This updates projections without adding players to the imported slate.
+3. Select locks/exclusions and generate up to 150 unique lineups.
+4. Export the CSV and use DraftKings **Upload Lineups** for that same slate. This export creates lineups, rather than editing previously reserved entries.
+
+Exports contain one lineup per row with headers `QB,RB,RB,WR,WR,WR,TE,FLEX,DST` and the imported DraftKings player IDs. Demo lineups cannot be exported. Every lineup must have nine unique players, valid positions, a salary at or below $50,000, players from at least two games, all locked players, and no excluded players. Importing duplicate players, Showdown or SuperFlex salaries, invalid game information or incomplete Classic pools reports an error. Changing locks, exclusions, salaries or projections clears previously generated lineups.
+
+The imported file defines the slate. Use a fresh matching file when DraftKings changes its player pool; this app does not independently fetch live DraftKings contest eligibility or verify the contest associated with an uploaded file. Game Info is interpreted in America/New_York time; players whose scheduled games have started cannot be generated or exported. Late swap of existing entries is not supported.
+
+The existing randomized generator remains a heuristic: it can return fewer lineups than requested and does not guarantee a mathematical optimum or find every feasible lineup. Exports are revalidated before downloading.
+
+## References
+
+- [DraftKings NFL Classic rules](https://lp.draftkings.com/help/rules/nfl/classic)
+- [DraftKings CSV upload instructions](https://support.draftkings.com/dk/en-us/how-do-i-upload-or-edit-multiple-lineups-at-once?id=kb_article_view&sysparm_article=KB0010800)
+
+Tests exercise salary-cap boundaries, roster and FLEX assignment, duplicate players and lineup permutations, slate membership, import errors, start times across Eastern standard/daylight time, CSV parsing, generator behavior, selection invalidation, and the import/projection event handlers. These tests run JavaScript with a simulated DOM; they do not log into DraftKings or call the paid SportsDataIO service.

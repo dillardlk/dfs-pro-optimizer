@@ -87,7 +87,7 @@ small,.muted{color:#aabbd0}
 <button id="generate">Generate Lineups</button>
 <button id="export" class="secondary">Export CSV</button>
 </div>
-<p class="muted">Lock or exclude players before generating. Demo results are for testing only.</p>
+<p class="muted">Lock or exclude players before generating. Demo results are for testing only and cannot be exported. Imported salaries define the active slate; use the matching contest file. Reimport if DraftKings changes eligibility.</p>
 </section>
 
 <section class="panel">
@@ -106,10 +106,11 @@ small,.muted{color:#aabbd0}
 </section>
 </main>
 
+<script src="/classic.js"></script>
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const slots=["QB","RB","RB","WR","WR","WR","TE","FLEX","DST"];
+const slots=Classic.slots;
 let pool=[],lineups=[];
 const money=n=>"$"+n.toLocaleString("en-US");
 const safe=s=>String(s).replace(/[&<>"']/g,c=>({
@@ -148,7 +149,7 @@ function render(){
  $("count").textContent=pool.length;
  $("players").innerHTML=visible.map(p=>`
  <tr>
- <td>${safe(p.name)}</td><td>${p.pos}</td><td>${p.team}</td>
+ <td>${safe(p.name)}</td><td>${safe(p.pos)}</td><td>${safe(p.team)}</td>
  <td>${money(p.salary)}</td><td>${p.proj.toFixed(1)}</td>
  <td><input type="checkbox" data-id="${p.id}" data-action="lock" ${p.locked?"checked":""}></td>
  <td><input type="checkbox" data-id="${p.id}" data-action="exclude" ${p.excluded?"checked":""}></td>
@@ -158,22 +159,18 @@ function render(){
 function eligible(p,slot){
  return slot==="FLEX"?["RB","WR","TE"].includes(p.pos):p.pos===slot;
 }
-function valid(lineup){
- if(lineup.length!==9||new Set(lineup.map(p=>p.id)).size!==9)return false;
- if(lineup.reduce((s,p)=>s+p.salary,0)>50000)return false;
- if(new Set(lineup.map(p=>p.team)).size<2)return false;
- const remaining=[...lineup];
- for(const slot of slots.filter(s=>s!=="FLEX")){
-  const index=remaining.findIndex(p=>eligible(p,slot));
-  if(index<0)return false;
-  remaining.splice(index,1);
- }
- return remaining.length===1&&eligible(remaining[0],"FLEX");
+function valid(lineup){return Classic.validate(lineup,pool).length===0;}
+function resetLineups(message="Player selections changed. Generate new lineups."){
+ lineups=[];
+ $("generated").textContent="0";
+ $("results").textContent=message;
 }
 
 function buildOne(){
- const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj));
+ const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
+   (p.source!=="dk"||p.startsAt>Date.now()));
  const locked=available.filter(p=>p.locked);
+ if(locked.some(p=>p.source==="dk"&&p.startsAt<=Date.now()))errors.push("A locked player’s game has already started. Unlock that player or import an upcoming slate.");
  if(locked.length>9)return null;
  let best=null,bestScore=-Infinity;
  // Randomized construction heuristic; not a mathematical optimal solver.
@@ -181,19 +178,6 @@ function buildOne(){
   const chosen=[...locked],used=new Set(locked.map(p=>p.id));
   let salary=chosen.reduce((s,p)=>s+p.salary,0);
   const order=["QB","DST","TE","RB","RB","WR","WR","WR","FLEX"];
-  // Assign locked players to compatible slots with backtracking.
-  function assign(i,remaining){
-   if(i===remaining.length)return [];
-   const slot=remaining[i];
-   const options=chosen.filter(p=>!p._assigned&&eligible(p,slot));
-   for(const p of options){
-    p._assigned=true;
-    const rest=assign(i+1,remaining);
-    if(rest){p._assigned=false;return [p,...rest]}
-    p._assigned=false;
-   }
-   return null;
-  }
   // Choose slots for locked players using a small exhaustive search.
   function placeLocks(i,remaining){
    if(i===locked.length)return remaining;
@@ -210,7 +194,6 @@ function buildOne(){
   if(!open)continue;
   let failed=false;
   for(const slot of open){
-   const remainingSlots=open.length-chosen.length+locked.length;
    const candidates=available.filter(p=>
      !used.has(p.id)&&eligible(p,slot)&&salary+p.salary<=50000
    );
@@ -234,37 +217,52 @@ function generate(){
  if(!Number.isInteger(count)||count<1||count>150){
   $("results").textContent="Choose between 1 and 150 lineups.";return;
  }
- if(!pool.length){$("results").textContent="Load demo players first.";return}
+ if(!pool.length){$("results").textContent="Import DraftKings salaries or load demo players first.";return}
+ const locked=pool.filter(p=>p.locked);
+ const errors=[];
+ const available=pool.filter(p=>!p.excluded&&Number.isFinite(p.proj)&&
+  (p.source!=="dk"||p.startsAt>Date.now()));
+ for(const [pos,min] of Object.entries({QB:1,RB:2,WR:3,TE:1,DST:1})){
+  if(available.filter(p=>p.pos===pos).length<min)errors.push(`Not enough eligible ${pos} players; need ${min}.`);
+ }
+ if(available.filter(p=>["RB","WR","TE"].includes(p.pos)).length<7)errors.push("Need at least 7 eligible RB/WR/TE players including FLEX.");
+ if(pool.some(p=>p.source==="dk")&&new Set(available.map(p=>p.game)).size<2)errors.push("Eligible players must span at least two games.");
+ if(locked.some(p=>p.source==="dk"&&p.startsAt<=Date.now()))errors.push("A locked player’s game has already started. Unlock that player or import an upcoming slate.");
+ if(locked.length>9)errors.push("You have locked more than 9 players.");
+ if(locked.reduce((s,p)=>s+p.salary,0)>50000)errors.push("Locked players exceed the $50,000 salary cap.");
+ for(const [pos,max] of Object.entries({QB:1,RB:3,WR:4,TE:2,DST:1})){
+  if(locked.filter(p=>p.pos===pos).length>max)errors.push(`Too many locked ${pos} players.`);
+ }
+ if(locked.filter(p=>["RB","WR","TE"].includes(p.pos)).length>7)errors.push("Only 7 RB/WR/TE players fit the roster.");
+ if(errors.length){resetLineups(errors.join(" "));return}
  lineups=[];
  const seen=new Set();
  for(let i=0;i<count*15&&lineups.length<count;i++){
   const lineup=buildOne();
   if(!lineup)break;
-  const key=lineup.map(p=>p.id).sort((a,b)=>a-b).join("-");
+  const key=Classic.key(lineup);
   if(seen.has(key))continue;
-  seen.add(key);lineups.push(lineup);
+  seen.add(key);lineups.push(Classic.order(lineup));
  }
  lineups.sort((a,b)=>
   b.reduce((s,p)=>s+p.proj,0)-a.reduce((s,p)=>s+p.proj,0)
  );
  $("generated").textContent=lineups.length;
+ if(lineups.length&&lineups.length<count)$("status").textContent=`Generated ${lineups.length} of ${count} requested unique lineups. Constraints or search limits prevented more results.`;
  $("results").innerHTML=lineups.length?lineups.map((l,i)=>{
   const salary=l.reduce((s,p)=>s+p.salary,0);
   const points=l.reduce((s,p)=>s+p.proj,0);
   return `<div class="lineup"><strong>Lineup ${i+1}</strong>
   <p class="good">${money(salary)} • ${points.toFixed(1)} projected points</p>
   <div>${l.map(p=>safe(p.name)+" ("+p.pos+")").join(" • ")}</div></div>`;
- }).join(""):"No valid lineup found. Try removing locks or exclusions.";
+ }).join(""):"No valid lineup found. Check locks, exclusions, positional availability, the $50,000 cap, and the two-game minimum. The randomized generator may miss feasible lineups.";
 }
 
 function exportCSV(){
  if(!lineups.length){alert("Generate lineups first.");return}
- const rows=[["Lineup","Player","Position","Team","Salary","Projection"]];
- lineups.forEach((l,i)=>l.forEach(p=>rows.push([
- i+1,p.name,p.pos,p.team,p.salary,p.proj
- ])));
- const csv=rows.map(row=>row.map(v=>
- '"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+ let csv;
+ try{csv=Classic.exportCSV(lineups,pool)}
+ catch(error){$("results").textContent="Export failed: "+error.message;return}
  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
  const a=document.createElement("a");
  a.href=url;a.download="dfs-pro-lineups.csv";a.click();
@@ -280,6 +278,7 @@ $("players").addEventListener("change",e=>{
  }else{
   p.excluded=input.checked;if(p.excluded)p.locked=false;
  }
+ resetLineups();
  render();
 });
 $("search").addEventListener("input",render);
@@ -288,7 +287,7 @@ $("generate").addEventListener("click",generate);
 $("export").addEventListener("click",exportCSV);
 $("mock").addEventListener("click",()=>{
   pool = makeDemo();
-  lineups = [];
+  resetLineups("Demo players loaded. Generate test lineups. Demo lineups cannot be exported.");
   render();
 });
  
@@ -463,54 +462,7 @@ $("importCSV").addEventListener("click", async () => {
   }
 
   try {
-    const rows = parseCSV(await file.text());
-    if (rows.length < 2) throw Error("CSV contains no players.");
-
-    const headers = rows.shift().map(x => x.trim().toLowerCase());
-    const col = (...names) => names
-      .map(n => headers.indexOf(n.toLowerCase()))
-      .find(i => i >= 0);
-
-    const nameCol = col("Name", "Player Name");
-    const posCol = col("Position", "Roster Position");
-    const salaryCol = col("Salary");
-    const teamCol = col("TeamAbbrev", "Team", "Team Abbrev");
-    const idCol = col("ID", "Player ID");
-    const avgCol = col("AvgPointsPerGame", "Avg Points Per Game");
-
-    if ([nameCol, posCol, salaryCol].some(x => x === undefined)) {
-      throw Error("Missing Name, Position, or Salary column.");
-    }
-
-    const imported = rows.map((r, i) => {
-      const pos = (r[posCol] || "").trim().toUpperCase();
-      const salary = Number((r[salaryCol] || "").replace(/[$,]/g, ""));
-      const avg = avgCol === undefined ? 0 : Number(r[avgCol]);
-
-      return {
-        id: i + 1,
-        dkId: idCol === undefined ? "" : r[idCol],
-        name: (r[nameCol] || "").trim(),
-        pos: pos === "D" || pos === "DEF" ? "DST" : pos,
-        team: teamCol === undefined ? "" : (r[teamCol] || "").trim(),
-        salary,
-        proj: Number.isFinite(avg) ? avg : 0,
-        locked: false,
-        excluded: false
-      };
-    }).filter(p =>
-      p.name &&
-      ["QB", "RB", "WR", "TE", "DST"].includes(p.pos) &&
-      Number.isFinite(p.salary) &&
-      p.salary > 0
-    );
-
-    if (!imported.length) throw Error("No valid NFL players found.");
-
-    const positions = new Set(imported.map(p => p.pos));
-    if (["QB", "RB", "WR", "TE", "DST"].some(p => !positions.has(p))) {
-      throw Error("CSV is missing required NFL Classic positions.");
-    }
+    const imported = Classic.importRows(parseCSV(await file.text()));
 
     pool = imported;
     lineups = [];
